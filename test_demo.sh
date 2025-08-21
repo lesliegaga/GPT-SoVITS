@@ -115,7 +115,7 @@ fi
 
 # 步骤3: ASR
 log_info "步骤3/9: 语音识别..."
-python tools/asr/fasterwhisper_asr.py \
+python tools/asr/funasr_asr.py \
     -i "$DENOISED_DIR" \
     -o "$ASR_OUTPUT" \
     -l "$LANGUAGE" \
