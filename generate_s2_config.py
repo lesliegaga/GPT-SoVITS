@@ -52,7 +52,8 @@ def generate_s2_config(
     data["data"]["exp_dir"] = exp_dir
     data["data"]["training_files"] = f"{exp_dir}/2-name2text.txt"
     data["data"]["validation_files"] = f"{exp_dir}/2-name2text.txt"
-    
+    # 与 webui.py 一致：将 s2_ckpt_dir 设为实验目录根（s2_dir）
+    data["s2_ckpt_dir"] = exp_dir
     
     # 设置实验名称
     data["name"] = exp_name
