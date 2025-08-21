@@ -226,7 +226,8 @@ cat > "$WORK_DIR/config_s2.json" << EOF
     "c_mel": 45,
     "c_kl": 1.0,
     "text_low_lr_rate": 0.4,
-    "grad_ckpt": false
+    "grad_ckpt": false,
+    "gpu_numbers": "$GPU_ID"
   },
   "data": {
     "max_wav_value": 32768.0,
@@ -256,11 +257,11 @@ cat > "$WORK_DIR/config_s2.json" << EOF
     "resblock_kernel_sizes": [3, 7, 11],
     "resblock_dilation_sizes": [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
     "upsample_rates": [10, 8, 2, 2, 2],
-    "upsample_initial_channel": 512,
-    "upsample_kernel_sizes": [16, 16, 8, 2, 2],
+    "upsample_initial_channel": 768,
+    "upsample_kernel_sizes": [20, 16, 8, 2, 2],
     "n_layers_q": 3,
     "use_spectral_norm": false,
-    "gin_channels": 512,
+    "gin_channels": 1024,
     "semantic_frame_rate": "25hz",
     "freeze_quantizer": true
   },
