@@ -204,8 +204,14 @@ def run(rank, n_gpus, hps):
         net_d = net_d.to(device)
 
     try:  # 如果能加载自动resume
+        latest_d_path = utils.latest_checkpoint_path("%s/logs_s2_%s" % (hps.data.exp_dir, hps.model.version), "D_*.pth")
+        latest_g_path = utils.latest_checkpoint_path("%s/logs_s2_%s" % (hps.data.exp_dir, hps.model.version), "G_*.pth")
+        
+        if latest_d_path is None or latest_g_path is None:
+            raise FileNotFoundError("No checkpoint files found")
+            
         _, _, _, epoch_str = utils.load_checkpoint(
-            utils.latest_checkpoint_path("%s/logs_s2_%s" % (hps.data.exp_dir, hps.model.version), "D_*.pth"),
+            latest_d_path,
             net_d,
             optim_d,
         )  # D多半加载没事
@@ -213,7 +219,7 @@ def run(rank, n_gpus, hps):
             logger.info("loaded D")
         # _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), net_g, optim_g,load_opt=0)
         _, _, _, epoch_str = utils.load_checkpoint(
-            utils.latest_checkpoint_path("%s/logs_s2_%s" % (hps.data.exp_dir, hps.model.version), "G_*.pth"),
+            latest_g_path,
             net_g,
             optim_g,
         )
@@ -226,39 +232,41 @@ def run(rank, n_gpus, hps):
         epoch_str = 1
         global_step = 0
         if (
-            hps.train.pretrained_s2G != ""
-            and hps.train.pretrained_s2G != None
-            and os.path.exists(hps.train.pretrained_s2G)
+            hasattr(hps, 'pretrained_s2G') and 
+            hps.pretrained_s2G != ""
+            and hps.pretrained_s2G != None
+            and os.path.exists(hps.pretrained_s2G)
         ):
             if rank == 0:
-                logger.info("loaded pretrained %s" % hps.train.pretrained_s2G)
+                logger.info("loaded pretrained %s" % hps.pretrained_s2G)
             print(
-                "loaded pretrained %s" % hps.train.pretrained_s2G,
+                "loaded pretrained %s" % hps.pretrained_s2G,
                 net_g.module.load_state_dict(
-                    torch.load(hps.train.pretrained_s2G, map_location="cpu", weights_only=False)["weight"],
+                    torch.load(hps.pretrained_s2G, map_location="cpu", weights_only=False)["weight"],
                     strict=False,
                 )
                 if torch.cuda.is_available()
                 else net_g.load_state_dict(
-                    torch.load(hps.train.pretrained_s2G, map_location="cpu", weights_only=False)["weight"],
+                    torch.load(hps.pretrained_s2G, map_location="cpu", weights_only=False)["weight"],
                     strict=False,
                 ),
             )  ##测试不加载优化器
         if (
-            hps.train.pretrained_s2D != ""
-            and hps.train.pretrained_s2D != None
-            and os.path.exists(hps.train.pretrained_s2D)
+            hasattr(hps, 'pretrained_s2D') and 
+            hps.pretrained_s2D != ""
+            and hps.pretrained_s2D != None
+            and os.path.exists(hps.pretrained_s2D)
         ):
             if rank == 0:
-                logger.info("loaded pretrained %s" % hps.train.pretrained_s2D)
+                logger.info("loaded pretrained %s" % hps.pretrained_s2D)
             print(
-                "loaded pretrained %s" % hps.train.pretrained_s2D,
+                "loaded pretrained %s" % hps.pretrained_s2D,
                 net_d.module.load_state_dict(
-                    torch.load(hps.train.pretrained_s2D, map_location="cpu", weights_only=False)["weight"], strict=False
+                    torch.load(hps.pretrained_s2D, map_location="cpu", weights_only=False)["weight"], strict=False
                 )
                 if torch.cuda.is_available()
                 else net_d.load_state_dict(
-                    torch.load(hps.train.pretrained_s2D, map_location="cpu", weights_only=False)["weight"],
+                    torch.load(hps.pretrained_s2D, map_location="cpu", weights_only=False)["weight"],
                 ),
             )
 
