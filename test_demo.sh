@@ -15,8 +15,8 @@ ASR_OUTPUT="$WORK_DIR/transcripts.list"
 # 预训练模型路径
 BERT_DIR="GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"
 CNHUBERT_DIR="GPT_SoVITS/pretrained_models/chinese-hubert-base"
-PRETRAINED_S2G="GPT_SoVITS/pretrained_models/s2G.pth"
-PRETRAINED_S2D="GPT_SoVITS/pretrained_models/s2D.pth"
+PRETRAINED_S2G="GPT_SoVITS/pretrained_models/v2Pro/s2Gv2ProPlus.pth"
+PRETRAINED_S2D="GPT_SoVITS/pretrained_models/v2Pro/s2Dv2ProPlus.pth"
 PRETRAINED_S1="GPT_SoVITS/pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt"
 
 # 训练参数
