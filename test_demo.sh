@@ -264,7 +264,7 @@ cat > "$WORK_DIR/config_s2.json" << EOF
     "gin_channels": 1024,
     "semantic_frame_rate": "25hz",
     "freeze_quantizer": true,
-    "version": "v2Pro"
+    "version": "v2ProPlus"
   },
   "s2_ckpt_dir": "$EXP_DIR/logs_s2",
   "content_module": "cnhubert",
