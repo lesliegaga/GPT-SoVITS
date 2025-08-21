@@ -23,16 +23,22 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
 
     def __init__(self, hparams, version=None, val=False):
         exp_dir = hparams.exp_dir
-        self.path2 = "%s/2-name2text.txt" % exp_dir
+        self.path2 = "%s/2-name2text-0.txt" % exp_dir
         self.path4 = "%s/4-cnhubert" % exp_dir
         self.path5 = "%s/5-wav32k" % exp_dir
-        assert os.path.exists(self.path2)
-        assert os.path.exists(self.path4)
-        assert os.path.exists(self.path5)
+        
+        # 检查必需的文件和目录，提供更清晰的错误信息
+        if not os.path.exists(self.path2):
+            raise FileNotFoundError(f"文本标注文件不存在: {self.path2}\n请先运行数据预处理步骤：python GPT_SoVITS/prepare_datasets/1-get-text.py")
+        if not os.path.exists(self.path4):
+            raise FileNotFoundError(f"Hubert特征目录不存在: {self.path4}\n请先运行数据预处理步骤：python GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py")
+        if not os.path.exists(self.path5):
+            raise FileNotFoundError(f"32k音频目录不存在: {self.path5}\n请先运行数据预处理步骤：python GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py")
         self.is_v2Pro = version in {"v2Pro", "v2ProPlus"}
         if self.is_v2Pro:
             self.path7 = "%s/7-sv_cn" % exp_dir
-            assert os.path.exists(self.path7)
+            if not os.path.exists(self.path7):
+                raise FileNotFoundError(f"说话人向量目录不存在: {self.path7}\n请先运行数据预处理步骤：python GPT_SoVITS/prepare_datasets/2-get-sv.py")
         names4 = set([name[:-3] for name in list(os.listdir(self.path4))])  # 去除.pt后缀
         names5 = set(os.listdir(self.path5))
         if self.is_v2Pro:
