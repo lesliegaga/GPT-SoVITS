@@ -210,7 +210,7 @@ python GPT_SoVITS/prepare_datasets/1-get-text.py
 
 ```bash
 # 设置环境变量(继承上面的设置)
-export cnhubert_base_path="GPT_SoVITS/pretrained_models/chinese-hubert-base"
+export cnhubert_base_dir="GPT_SoVITS/pretrained_models/chinese-hubert-base"
 
 # 执行音频特征提取
 python GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py
@@ -587,7 +587,7 @@ export inp_wav_dir="$DENOISED_DIR"
 export exp_name="$EXP_NAME"
 export opt_dir="$EXP_DIR"
 export bert_pretrained_dir="$BERT_DIR"
-export cnhubert_base_path="$CNHUBERT_DIR"
+export cnhubert_base_dir="$CNHUBERT_DIR"
 export pretrained_s2G="$PRETRAINED_S2G"
 export s2config_path="GPT_SoVITS/configs/s2.json"
 export i_part="0"
@@ -842,6 +842,24 @@ if [[ "$LANGUAGE" == "zh" ]]; then
 else
     python tools/asr/fasterwhisper_asr.py -i input -o output -l "$LANGUAGE"
 fi
+```
+
+#### 问题：音频特征提取失败 - cnhubert_base_path为None
+```bash
+# 问题症状：TypeError: stat: path should be string, bytes, os.PathLike or integer, not NoneType
+# 原因：环境变量名称不匹配
+
+# 错误的设置（代码期望的是 cnhubert_base_dir 而不是 cnhubert_base_path）
+export cnhubert_base_path="GPT_SoVITS/pretrained_models/chinese-hubert-base"
+
+# 正确的设置
+export cnhubert_base_dir="GPT_SoVITS/pretrained_models/chinese-hubert-base"
+
+# 验证环境变量
+echo $cnhubert_base_dir
+
+# 检查模型文件是否存在
+ls -la GPT_SoVITS/pretrained_models/chinese-hubert-base/
 ```
 
 #### 问题：M4A文件处理失败
