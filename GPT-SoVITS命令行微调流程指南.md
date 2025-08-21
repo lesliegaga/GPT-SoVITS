@@ -187,7 +187,7 @@ python tools/asr/fasterwhisper_asr.py \
 
 ```bash
 # 设置环境变量
-export inp_text="/path/to/transcripts.list"
+export inp_text="/path/to/transcripts"
 export inp_wav_dir="/path/to/sliced_audio_folder"  
 export exp_name="my_experiment"
 export opt_dir="/path/to/experiments/my_experiment"
@@ -435,7 +435,7 @@ EXP_DIR="$WORK_DIR/experiments/$EXP_NAME"
 # 数据处理路径
 SLICED_DIR="$WORK_DIR/sliced"
 DENOISED_DIR="$WORK_DIR/denoised"  
-ASR_OUTPUT="$WORK_DIR/transcripts.list"
+ASR_OUTPUT="$WORK_DIR/transcripts"
 
 # 预训练模型路径
 BERT_DIR="GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"
@@ -567,15 +567,6 @@ if [[ -d "$ASR_OUTPUT" ]]; then
         ASR_OUTPUT="$ACTUAL_LIST_FILE"
     else
         log_error "未找到ASR输出的.list文件"
-    fi
-elif [[ ! -f "$ASR_OUTPUT" ]]; then
-    # 检查是否在当前目录或其他位置生成了文件
-    POSSIBLE_OUTPUT="${ASR_OUTPUT%.*}.list"
-    if [[ -f "$POSSIBLE_OUTPUT" ]]; then
-        ASR_OUTPUT="$POSSIBLE_OUTPUT"
-        log_info "发现ASR输出文件: $ASR_OUTPUT"
-    else
-        log_error "未找到ASR输出文件: $ASR_OUTPUT"
     fi
 fi
 
@@ -824,13 +815,13 @@ log_info "训练完成！"
 ```bash
 # 问题症状：ASR创建了目录而不是文件
 # 解决方案：查找实际的.list文件
-if [[ -d "/path/to/transcripts.list" ]]; then
-    ACTUAL_FILE=$(find "/path/to/transcripts.list" -name "*.list" | head -1)
+if [[ -d "/path/to/transcripts" ]]; then
+    ACTUAL_FILE=$(find "/path/to/transcripts" -name "*.list" | head -1)
     echo "实际ASR文件位置: $ACTUAL_FILE"
 fi
 
 # 手动修复路径
-export inp_text="/path/to/transcripts.list/denoised.list"
+export inp_text="/path/to/transcripts/denoised.list"
 ```
 
 #### 问题：read命令在非交互模式下失败

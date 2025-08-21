@@ -10,7 +10,7 @@ EXP_DIR="$WORK_DIR/experiments/$EXP_NAME"
 # 数据处理路径
 SLICED_DIR="$WORK_DIR/sliced"
 DENOISED_DIR="$WORK_DIR/denoised"
-ASR_OUTPUT="$WORK_DIR/transcripts.list"
+ASR_OUTPUT="$WORK_DIR/transcripts"
 
 # 预训练模型路径
 BERT_DIR="GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"
