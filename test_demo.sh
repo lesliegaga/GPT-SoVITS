@@ -263,14 +263,14 @@ cat > "$WORK_DIR/config_s2.json" << EOF
     "use_spectral_norm": false,
     "gin_channels": 1024,
     "semantic_frame_rate": "25hz",
-    "freeze_quantizer": true
+    "freeze_quantizer": true,
+    "version": "v2"
   },
   "s2_ckpt_dir": "$EXP_DIR/logs_s2",
   "content_module": "cnhubert",
   "pretrained_s2G": "$PRETRAINED_S2G",
   "pretrained_s2D": "$PRETRAINED_S2D",
-  "name": "$EXP_NAME",
-  "version": "v2"
+  "name": "$EXP_NAME"
 }
 EOF
 
