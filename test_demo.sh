@@ -178,40 +178,104 @@ export pretrained_s2G="$PRETRAINED_S2G"
 export pretrained_s2D="$PRETRAINED_S2D"
 export sv_path="$PRETRAINED_SV"
 export s2config_path="GPT_SoVITS/configs/s2v2ProPlus.json"
-export i_part="0"
-export all_parts="1"
-export _CUDA_VISIBLE_DEVICES="$GPU_ID"
 export is_half="True"
 export BATCH_SIZE="$BATCH_SIZE"
 export EPOCHS_S2="$EPOCHS_S2"
 
-# 步骤4: 文本分词与BERT特征提取
-log_info "步骤4/9: 文本分词与BERT特征提取..."
-python GPT_SoVITS/prepare_datasets/1-get-text.py
-if [[ $? -ne 0 ]]; then
-    log_error "文本特征提取失败"
+### 并行分片设置（按 GPU_ID 形如 "0" 或 "0-1-2" 解析）
+gpu_names=(${GPU_ID//-/ })
+all_parts=${#gpu_names[@]}
+if [[ $all_parts -eq 0 ]]; then
+    all_parts=1
+    gpu_names=("0")
 fi
 
-# 步骤5: 音频特征提取
-log_info "步骤5/9: 音频特征提取..."
-python GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py
-if [[ $? -ne 0 ]]; then
-    log_error "音频特征提取失败"
-fi
+# 步骤4: 文本分词与BERT特征提取（并行）
+log_info "步骤4/9: 文本分词与BERT特征提取（并行 $all_parts 份）..."
+pids=()
+for idx in "${!gpu_names[@]}"; do
+    i_part="$idx"
+    _CUDA_VISIBLE_DEVICES_PART="${gpu_names[$idx]}"
+    log_info "启动1-get-text分片 i_part=$i_part 总份数=$all_parts 绑定GPU=$_CUDA_VISIBLE_DEVICES_PART"
+    i_part="$i_part" all_parts="$all_parts" _CUDA_VISIBLE_DEVICES="$_CUDA_VISIBLE_DEVICES_PART" \
+    python GPT_SoVITS/prepare_datasets/1-get-text.py &
+    pids+=("$!")
+done
 
-# 步骤5.5: 说话人向量提取
-log_info "步骤5.5/9: 说话人向量提取..."
-python GPT_SoVITS/prepare_datasets/2-get-sv.py
-if [[ $? -ne 0 ]]; then
-    log_error "说话人向量提取失败"
-fi
+for pid in "${pids[@]}"; do
+    wait "$pid" || log_error "文本特征提取分片任务失败 (pid=$pid)"
+done
 
-# 步骤6: 语义特征提取
-log_info "步骤6/9: 语义特征提取..."
-python GPT_SoVITS/prepare_datasets/3-get-semantic.py
-if [[ $? -ne 0 ]]; then
-    log_error "语义特征提取失败"
-fi
+# 合并 2-name2text-*.txt -> 2-name2text.txt
+MERGED_TXT="$EXP_DIR/2-name2text.txt"
+> "$MERGED_TXT"
+for idx in "${!gpu_names[@]}"; do
+    PART_TXT="$EXP_DIR/2-name2text-$idx.txt"
+    if [[ -f "$PART_TXT" ]]; then
+        cat "$PART_TXT" >> "$MERGED_TXT"
+        rm -f "$PART_TXT"
+    else
+        log_error "缺少分片文本文件: $PART_TXT"
+    fi
+done
+
+# 步骤5: 音频特征提取（并行）
+log_info "步骤5/9: 音频特征提取（并行 $all_parts 份）..."
+pids=()
+for idx in "${!gpu_names[@]}"; do
+    i_part="$idx"
+    _CUDA_VISIBLE_DEVICES_PART="${gpu_names[$idx]}"
+    log_info "启动2-get-hubert-wav32k分片 i_part=$i_part 总份数=$all_parts 绑定GPU=$_CUDA_VISIBLE_DEVICES_PART"
+    i_part="$i_part" all_parts="$all_parts" _CUDA_VISIBLE_DEVICES="$_CUDA_VISIBLE_DEVICES_PART" \
+    python GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py &
+    pids+=("$!")
+done
+for pid in "${pids[@]}"; do
+    wait "$pid" || log_error "音频特征提取分片任务失败 (pid=$pid)"
+done
+
+# 步骤5.5: 说话人向量提取（并行）
+log_info "步骤5.5/9: 说话人向量提取（并行 $all_parts 份）..."
+pids=()
+for idx in "${!gpu_names[@]}"; do
+    i_part="$idx"
+    _CUDA_VISIBLE_DEVICES_PART="${gpu_names[$idx]}"
+    log_info "启动2-get-sv分片 i_part=$i_part 总份数=$all_parts 绑定GPU=$_CUDA_VISIBLE_DEVICES_PART"
+    i_part="$i_part" all_parts="$all_parts" _CUDA_VISIBLE_DEVICES="$_CUDA_VISIBLE_DEVICES_PART" \
+    python GPT_SoVITS/prepare_datasets/2-get-sv.py &
+    pids+=("$!")
+done
+for pid in "${pids[@]}"; do
+    wait "$pid" || log_error "说话人向量提取分片任务失败 (pid=$pid)"
+done
+
+# 步骤6: 语义特征提取（并行）
+log_info "步骤6/9: 语义特征提取（并行 $all_parts 份）..."
+pids=()
+for idx in "${!gpu_names[@]}"; do
+    i_part="$idx"
+    _CUDA_VISIBLE_DEVICES_PART="${gpu_names[$idx]}"
+    log_info "启动3-get-semantic分片 i_part=$i_part 总份数=$all_parts 绑定GPU=$_CUDA_VISIBLE_DEVICES_PART"
+    i_part="$i_part" all_parts="$all_parts" _CUDA_VISIBLE_DEVICES="$_CUDA_VISIBLE_DEVICES_PART" \
+    python GPT_SoVITS/prepare_datasets/3-get-semantic.py &
+    pids+=("$!")
+done
+for pid in "${pids[@]}"; do
+    wait "$pid" || log_error "语义特征提取分片任务失败 (pid=$pid)"
+done
+
+# 合并 6-name2semantic-*.tsv -> 6-name2semantic.tsv（含表头）
+MERGED_SEM="$EXP_DIR/6-name2semantic.tsv"
+echo -e "item_name\tsemantic_audio" > "$MERGED_SEM"
+for idx in "${!gpu_names[@]}"; do
+    PART_SEM="$EXP_DIR/6-name2semantic-$idx.tsv"
+    if [[ -f "$PART_SEM" ]]; then
+        cat "$PART_SEM" >> "$MERGED_SEM"
+        rm -f "$PART_SEM"
+    else
+        log_error "缺少分片语义文件: $PART_SEM"
+    fi
+done
 
 # ==================== 模型训练阶段 ====================
 log_info "==================== 开始模型训练 ===================="

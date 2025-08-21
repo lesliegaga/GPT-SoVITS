@@ -23,7 +23,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
 
     def __init__(self, hparams, version=None, val=False):
         exp_dir = hparams.exp_dir
-        self.path2 = "%s/2-name2text-0.txt" % exp_dir
+        self.path2 = "%s/2-name2text.txt" % exp_dir
         self.path4 = "%s/4-cnhubert" % exp_dir
         self.path5 = "%s/5-wav32k" % exp_dir
         

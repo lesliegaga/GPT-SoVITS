@@ -204,8 +204,8 @@ def run(rank, n_gpus, hps):
         net_d = net_d.to(device)
 
     try:  # 如果能加载自动resume
-        latest_d_path = utils.latest_checkpoint_path("%s/logs_s2_%s" % (hps.data.exp_dir, hps.model.version), "D_*.pth")
-        latest_g_path = utils.latest_checkpoint_path("%s/logs_s2_%s" % (hps.data.exp_dir, hps.model.version), "G_*.pth")
+        latest_d_path = utils.latest_checkpoint_path(hps.s2_ckpt_dir, "D_*.pth")
+        latest_g_path = utils.latest_checkpoint_path(hps.s2_ckpt_dir, "G_*.pth")
         
         if latest_d_path is None or latest_g_path is None:
             raise FileNotFoundError("No checkpoint files found")

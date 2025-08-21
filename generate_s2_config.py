@@ -53,8 +53,6 @@ def generate_s2_config(
     data["data"]["training_files"] = f"{exp_dir}/2-name2text.txt"
     data["data"]["validation_files"] = f"{exp_dir}/2-name2text.txt"
     
-    # 设置输出目录
-    data["s2_ckpt_dir"] = f"{exp_dir}/logs_s2"
     
     # 设置实验名称
     data["name"] = exp_name
