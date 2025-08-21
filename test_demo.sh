@@ -62,7 +62,7 @@ mkdir -p "$WORK_DIR" "$SLICED_DIR" "$DENOISED_DIR" "$EXP_DIR"
 log_info "==================== 开始数据预处理 ===================="
 
 # 步骤0: 音频格式转换(如果需要)
-log_info "步骤0/8: 检查音频格式并转换..."
+log_info "步骤0/9: 检查音频格式并转换..."
 if find "$INPUT_AUDIO" -name "*.m4a" -o -name "*.mp3" -o -name "*.aac" -o -name "*.flac" | grep -q .; then
     log_info "发现非WAV格式音频文件，开始转换..."
     CONVERTED_DIR="$WORK_DIR/converted_wav"
@@ -115,16 +115,52 @@ fi
 
 # 步骤3: ASR
 log_info "步骤3/9: 语音识别..."
-python tools/asr/funasr_asr.py \
-    -i "$DENOISED_DIR" \
-    -o "$ASR_OUTPUT"
+if [[ "$LANGUAGE" == "zh" ]]; then
+    # 中文使用FunASR
+    python tools/asr/funasr_asr.py \
+        -i "$DENOISED_DIR" \
+        -o "$ASR_OUTPUT"
+else
+    # 其他语言使用Faster-Whisper
+    python tools/asr/fasterwhisper_asr.py \
+        -i "$DENOISED_DIR" \
+        -o "$ASR_OUTPUT" \
+        -l "$LANGUAGE" \
+        -p "float16"
+fi
+
 if [[ $? -ne 0 ]]; then
     log_error "语音识别失败"
 fi
 
+# 检查ASR输出文件的实际位置
+if [[ -d "$ASR_OUTPUT" ]]; then
+    # ASR工具创建了目录，查找实际的.list文件
+    ACTUAL_LIST_FILE=$(find "$ASR_OUTPUT" -name "*.list" | head -1)
+    if [[ -f "$ACTUAL_LIST_FILE" ]]; then
+        log_info "发现ASR输出文件: $ACTUAL_LIST_FILE"
+        ASR_OUTPUT="$ACTUAL_LIST_FILE"
+    else
+        log_error "未找到ASR输出的.list文件"
+    fi
+elif [[ ! -f "$ASR_OUTPUT" ]]; then
+    # 检查是否在当前目录或其他位置生成了文件
+    POSSIBLE_OUTPUT="${ASR_OUTPUT%.*}.list"
+    if [[ -f "$POSSIBLE_OUTPUT" ]]; then
+        ASR_OUTPUT="$POSSIBLE_OUTPUT"
+        log_info "发现ASR输出文件: $ASR_OUTPUT"
+    else
+        log_error "未找到ASR输出文件: $ASR_OUTPUT"
+    fi
+fi
+
 log_info "数据预处理完成，请检查并校对转录文件: $ASR_OUTPUT"
 echo "按Enter继续，或Ctrl+C退出以手动校对转录..."
-read
+if [[ -t 0 ]]; then
+    read
+else
+    log_info "非交互模式，跳过手动校对确认"
+fi
 
 # ==================== 特征提取阶段 ====================
 log_info "==================== 开始特征提取 ===================="
