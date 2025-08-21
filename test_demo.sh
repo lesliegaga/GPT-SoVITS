@@ -117,9 +117,7 @@ fi
 log_info "步骤3/9: 语音识别..."
 python tools/asr/funasr_asr.py \
     -i "$DENOISED_DIR" \
-    -o "$ASR_OUTPUT" \
-    -l "$LANGUAGE" \
-    -p "float16"
+    -o "$ASR_OUTPUT"
 if [[ $? -ne 0 ]]; then
     log_error "语音识别失败"
 fi
