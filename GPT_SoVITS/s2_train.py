@@ -231,42 +231,44 @@ def run(rank, n_gpus, hps):
         # traceback.print_exc()
         epoch_str = 1
         global_step = 0
+        # 兼容新老配置位置：优先从 hps.train 读取，回退到顶层 hps
+        pretrained_s2G_path = getattr(getattr(hps, "train", object()), "pretrained_s2G", getattr(hps, "pretrained_s2G", ""))
+        pretrained_s2D_path = getattr(getattr(hps, "train", object()), "pretrained_s2D", getattr(hps, "pretrained_s2D", ""))
+
         if (
-            hasattr(hps, 'pretrained_s2G') and 
-            hps.pretrained_s2G != ""
-            and hps.pretrained_s2G != None
-            and os.path.exists(hps.pretrained_s2G)
+            pretrained_s2G_path != ""
+            and pretrained_s2G_path is not None
+            and os.path.exists(pretrained_s2G_path)
         ):
             if rank == 0:
-                logger.info("loaded pretrained %s" % hps.pretrained_s2G)
+                logger.info("loaded pretrained %s" % pretrained_s2G_path)
             print(
-                "loaded pretrained %s" % hps.pretrained_s2G,
+                "loaded pretrained %s" % pretrained_s2G_path,
                 net_g.module.load_state_dict(
-                    torch.load(hps.pretrained_s2G, map_location="cpu", weights_only=False)["weight"],
+                    torch.load(pretrained_s2G_path, map_location="cpu", weights_only=False)["weight"],
                     strict=False,
                 )
                 if torch.cuda.is_available()
                 else net_g.load_state_dict(
-                    torch.load(hps.pretrained_s2G, map_location="cpu", weights_only=False)["weight"],
+                    torch.load(pretrained_s2G_path, map_location="cpu", weights_only=False)["weight"],
                     strict=False,
                 ),
             )  ##测试不加载优化器
         if (
-            hasattr(hps, 'pretrained_s2D') and 
-            hps.pretrained_s2D != ""
-            and hps.pretrained_s2D != None
-            and os.path.exists(hps.pretrained_s2D)
+            pretrained_s2D_path != ""
+            and pretrained_s2D_path is not None
+            and os.path.exists(pretrained_s2D_path)
         ):
             if rank == 0:
-                logger.info("loaded pretrained %s" % hps.pretrained_s2D)
+                logger.info("loaded pretrained %s" % pretrained_s2D_path)
             print(
-                "loaded pretrained %s" % hps.pretrained_s2D,
+                "loaded pretrained %s" % pretrained_s2D_path,
                 net_d.module.load_state_dict(
-                    torch.load(hps.pretrained_s2D, map_location="cpu", weights_only=False)["weight"], strict=False
+                    torch.load(pretrained_s2D_path, map_location="cpu", weights_only=False)["weight"], strict=False
                 )
                 if torch.cuda.is_available()
                 else net_d.load_state_dict(
-                    torch.load(hps.pretrained_s2D, map_location="cpu", weights_only=False)["weight"],
+                    torch.load(pretrained_s2D_path, map_location="cpu", weights_only=False)["weight"],
                 ),
             )
 

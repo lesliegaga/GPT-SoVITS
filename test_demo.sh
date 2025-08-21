@@ -175,12 +175,15 @@ export opt_dir="$EXP_DIR"
 export bert_pretrained_dir="$BERT_DIR"
 export cnhubert_base_dir="$CNHUBERT_DIR"
 export pretrained_s2G="$PRETRAINED_S2G"
+export pretrained_s2D="$PRETRAINED_S2D"
 export sv_path="$PRETRAINED_SV"
 export s2config_path="GPT_SoVITS/configs/s2v2ProPlus.json"
 export i_part="0"
 export all_parts="1"
 export _CUDA_VISIBLE_DEVICES="$GPU_ID"
 export is_half="True"
+export BATCH_SIZE="$BATCH_SIZE"
+export EPOCHS_S2="$EPOCHS_S2"
 
 # 步骤4: 文本分词与BERT特征提取
 log_info "步骤4/9: 文本分词与BERT特征提取..."
@@ -217,72 +220,8 @@ log_info "==================== 开始模型训练 ===================="
 log_info "步骤7/9: SoVITS模型训练..."
 
 # 创建SoVITS训练配置
-cat > "$WORK_DIR/config_s2.json" << EOF
-{
-  "train": {
-    "log_interval": 100,
-    "eval_interval": 500,
-    "seed": 1234,
-    "epochs": $EPOCHS_S2,
-    "learning_rate": 0.0001,
-    "betas": [0.8, 0.99],
-    "eps": 1e-09,
-    "batch_size": $BATCH_SIZE,
-    "fp16_run": true,
-    "lr_decay": 0.999875,
-    "segment_size": 20480,
-    "init_lr_ratio": 1,
-    "warmup_epochs": 0,
-    "c_mel": 45,
-    "c_kl": 1.0,
-    "text_low_lr_rate": 0.4,
-    "grad_ckpt": false,
-    "gpu_numbers": "$GPU_ID"
-  },
-  "data": {
-    "max_wav_value": 32768.0,
-    "sampling_rate": 32000,
-    "filter_length": 2048,
-    "hop_length": 640,
-    "win_length": 2048,
-    "n_mel_channels": 128,
-    "mel_fmin": 0.0,
-    "mel_fmax": null,
-    "add_blank": true,
-    "n_speakers": 300,
-    "cleaned_text": true,
-    "exp_dir": "$EXP_DIR",
-    "training_files": "$EXP_DIR/2-name2text.txt",
-    "validation_files": "$EXP_DIR/2-name2text.txt"
-  },
-  "model": {
-    "inter_channels": 192,
-    "hidden_channels": 192,
-    "filter_channels": 768,
-    "n_heads": 2,
-    "n_layers": 6,
-    "kernel_size": 3,
-    "p_dropout": 0.1,
-    "resblock": "1",
-    "resblock_kernel_sizes": [3, 7, 11],
-    "resblock_dilation_sizes": [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
-    "upsample_rates": [10, 8, 2, 2, 2],
-    "upsample_initial_channel": 768,
-    "upsample_kernel_sizes": [20, 16, 8, 2, 2],
-    "n_layers_q": 3,
-    "use_spectral_norm": false,
-    "gin_channels": 1024,
-    "semantic_frame_rate": "25hz",
-    "freeze_quantizer": true,
-    "version": "v2ProPlus"
-  },
-  "s2_ckpt_dir": "$EXP_DIR/logs_s2",
-  "content_module": "cnhubert",
-  "pretrained_s2G": "$PRETRAINED_S2G",
-  "pretrained_s2D": "$PRETRAINED_S2D",
-  "name": "$EXP_NAME"
-}
-EOF
+export S2_VERSION="v2ProPlus"
+python generate_s2_config.py "$WORK_DIR/config_s2.json"
 
 # 执行SoVITS训练
 python GPT_SoVITS/s2_train.py --config "$WORK_DIR/config_s2.json"
