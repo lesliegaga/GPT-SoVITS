@@ -18,6 +18,7 @@ CNHUBERT_DIR="GPT_SoVITS/pretrained_models/chinese-hubert-base"
 PRETRAINED_S2G="GPT_SoVITS/pretrained_models/v2Pro/s2Gv2ProPlus.pth"
 PRETRAINED_S2D="GPT_SoVITS/pretrained_models/v2Pro/s2Dv2ProPlus.pth"
 PRETRAINED_S1="GPT_SoVITS/pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt"
+PRETRAINED_SV="GPT_SoVITS/pretrained_models/sv/pretrained_eres2netv2w24s4ep4.ckpt"
 
 # 训练参数
 BATCH_SIZE=16
@@ -53,6 +54,7 @@ log_info "检查环境和依赖文件..."
 check_dir_exists "$INPUT_AUDIO"
 check_file_exists "$PRETRAINED_S2G"
 check_file_exists "$PRETRAINED_S1"
+check_file_exists "$PRETRAINED_SV"
 
 # ==================== 创建工作目录 ====================
 log_info "创建工作目录..."
@@ -173,6 +175,7 @@ export opt_dir="$EXP_DIR"
 export bert_pretrained_dir="$BERT_DIR"
 export cnhubert_base_dir="$CNHUBERT_DIR"
 export pretrained_s2G="$PRETRAINED_S2G"
+export sv_path="$PRETRAINED_SV"
 export s2config_path="GPT_SoVITS/configs/s2v2ProPlus.json"
 export i_part="0"
 export all_parts="1"
@@ -191,6 +194,13 @@ log_info "步骤5/9: 音频特征提取..."
 python GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py
 if [[ $? -ne 0 ]]; then
     log_error "音频特征提取失败"
+fi
+
+# 步骤5.5: 说话人向量提取
+log_info "步骤5.5/9: 说话人向量提取..."
+python GPT_SoVITS/prepare_datasets/2-get-sv.py
+if [[ $? -ne 0 ]]; then
+    log_error "说话人向量提取失败"
 fi
 
 # 步骤6: 语义特征提取
