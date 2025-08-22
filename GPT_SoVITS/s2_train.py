@@ -74,11 +74,8 @@ def run(rank, n_gpus, hps):
         logger = utils.get_logger(hps.data.exp_dir)
         logger.info(hps)
         # utils.check_git_hash(hps.s2_ckpt_dir)
-        # 与 webui 一致：events.out.* 写入 logs_s2_{version} 目录
-        tb_dir = os.path.join(hps.s2_ckpt_dir, f"logs_s2_{hps.model.version}")
-        os.makedirs(tb_dir, exist_ok=True)
-        writer = SummaryWriter(log_dir=tb_dir)
-        writer_eval = SummaryWriter(log_dir=os.path.join(tb_dir, "eval"))
+        writer = SummaryWriter(log_dir=hps.s2_ckpt_dir)
+        writer_eval = SummaryWriter(log_dir=os.path.join(hps.s2_ckpt_dir, "eval"))
 
     dist.init_process_group(
         backend="gloo" if os.name == "nt" or not torch.cuda.is_available() else "nccl",
@@ -207,7 +204,7 @@ def run(rank, n_gpus, hps):
         net_d = net_d.to(device)
 
     try:  # 如果能加载自动resume
-        ckpt_dir = os.path.join(hps.s2_ckpt_dir, f"logs_s2_{hps.model.version}")
+        ckpt_dir = os.path.join(hps.data.exp_dir, f"logs_s2_{hps.model.version}")
         os.makedirs(ckpt_dir, exist_ok=True)
         latest_d_path = utils.latest_checkpoint_path(ckpt_dir, "D_*.pth")
         latest_g_path = utils.latest_checkpoint_path(ckpt_dir, "G_*.pth")
@@ -527,7 +524,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
                     )
         global_step += 1
     if epoch % hps.train.save_every_epoch == 0 and rank == 0:
-        save_root_dir = os.path.join(hps.s2_ckpt_dir, f"logs_s2_{hps.model.version}")
+        save_root_dir = os.path.join(hps.data.exp_dir, f"logs_s2_{hps.model.version}")
         os.makedirs(save_root_dir, exist_ok=True)
 
         if hps.train.if_save_latest == 0:

@@ -17,7 +17,34 @@ def synthesize(
     target_text_path,
     target_language,
     output_path,
+    bert_path=None,
+    cnhubert_base_path=None,
+    gpu_number="0",
+    is_half=True,
 ):
+    # 设置必要的环境变量，与 webui.py 中 change_tts_inference 保持一致
+    if bert_path:
+        os.environ["bert_path"] = bert_path
+    if cnhubert_base_path:
+        os.environ["cnhubert_base_path"] = cnhubert_base_path
+    
+    # 设置GPU设备
+    os.environ["_CUDA_VISIBLE_DEVICES"] = str(gpu_number)
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_number)
+    
+    # 设置半精度
+    os.environ["is_half"] = str(is_half)
+    
+    # 设置模型路径环境变量
+    os.environ["gpt_path"] = GPT_model_path
+    os.environ["sovits_path"] = SoVITS_model_path
+    
+    # 设置默认的预训练模型路径（如果未指定）
+    if not bert_path:
+        os.environ["bert_path"] = "GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"
+    if not cnhubert_base_path:
+        os.environ["cnhubert_base_path"] = "GPT_SoVITS/pretrained_models/chinese-hubert-base"
+
     # Read reference text
     with open(ref_text_path, "r", encoding="utf-8") as file:
         ref_text = file.read()
@@ -67,6 +94,12 @@ def main():
         help="Language of the target text",
     )
     parser.add_argument("--output_path", required=True, help="Path to the output directory")
+    
+    # 新增参数，与 webui.py 中 change_tts_inference 保持一致
+    parser.add_argument("--bert_path", help="Path to the BERT pretrained model directory")
+    parser.add_argument("--cnhubert_base_path", help="Path to the Chinese HuBERT base model directory")
+    parser.add_argument("--gpu_number", default="0", help="GPU device number (default: 0)")
+    parser.add_argument("--is_half", action="store_true", default=True, help="Use half precision (default: True)")
 
     args = parser.parse_args()
 
@@ -79,6 +112,10 @@ def main():
         args.target_text,
         args.target_language,
         args.output_path,
+        args.bert_path,
+        args.cnhubert_base_path,
+        args.gpu_number,
+        args.is_half,
     )
 
 

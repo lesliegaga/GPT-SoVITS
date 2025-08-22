@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 生成SoVITS训练配置文件
-按照webui.py的逻辑生成正确的配置
+按照webui.py中open1Ba的逻辑生成正确的配置
 """
 
 import json
 import sys
 import os
+from config import SoVITS_weight_version2root, exp_root
 
 def generate_s2_config(
     version="v2ProPlus",
@@ -18,44 +19,52 @@ def generate_s2_config(
     pretrained_s2G=None,
     pretrained_s2D=None,
     gpu_numbers="0",
+    text_low_lr_rate=0.4,
+    if_save_latest=True,
+    if_save_every_weights=True,
+    save_every_epoch=4,
+    if_grad_ckpt=False,
+    lora_rank=32,
+    is_half=True,
     output_path=None
 ):
-    """生成SoVITS训练配置文件"""
+    """生成SoVITS训练配置文件，完全按照webui.py中open1Ba的逻辑"""
     
-    # 确定基础配置文件路径
-    if version not in {"v2Pro", "v2ProPlus"}:
-        config_file = "GPT_SoVITS/configs/s2.json"
-    else:
-        config_file = f"GPT_SoVITS/configs/s2{version}.json"
+    # 按照webui.py的逻辑选择基础配置文件
+    config_file = (
+        "GPT_SoVITS/configs/s2.json"
+        if version not in {"v2Pro", "v2ProPlus"}
+        else f"GPT_SoVITS/configs/s2{version}.json"
+    )
     
-    # 读取基础配置
+    # 加载基础配置文件，与webui.py完全一致
     with open(config_file, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+        data = f.read()
+        data = json.loads(data)
     
-    # 根据webui.py的逻辑设置训练参数
+    # 设置实验目录路径，与webui.py一致
+    s2_dir = "%s/%s" % (exp_root, exp_name)
+    
+    # 按照webui.py的逻辑处理is_half
+    if is_half == False:
+        data["train"]["fp16_run"] = False
+        batch_size = max(1, batch_size // 2)
+    
+    # 按照webui.py的逻辑设置训练参数
     data["train"]["batch_size"] = batch_size
     data["train"]["epochs"] = total_epoch
-    data["train"]["text_low_lr_rate"] = 0.4
+    data["train"]["text_low_lr_rate"] = text_low_lr_rate
     data["train"]["pretrained_s2G"] = pretrained_s2G
     data["train"]["pretrained_s2D"] = pretrained_s2D
-    data["train"]["if_save_latest"] = True
-    data["train"]["if_save_every_weights"] = True
-    data["train"]["save_every_epoch"] = 4  # 默认保存频率
+    data["train"]["if_save_latest"] = if_save_latest
+    data["train"]["if_save_every_weights"] = if_save_every_weights
+    data["train"]["save_every_epoch"] = save_every_epoch
     data["train"]["gpu_numbers"] = gpu_numbers
-    data["train"]["grad_ckpt"] = False
-    data["train"]["lora_rank"] = 32  # 对v3/v4有效
-    
-    # 设置模型版本
+    data["train"]["grad_ckpt"] = if_grad_ckpt
+    data["train"]["lora_rank"] = lora_rank
     data["model"]["version"] = version
-    
-    # 设置数据路径
-    data["data"]["exp_dir"] = exp_dir
-    data["data"]["training_files"] = f"{exp_dir}/2-name2text.txt"
-    data["data"]["validation_files"] = f"{exp_dir}/2-name2text.txt"
-    # 与 webui.py 一致：将 s2_ckpt_dir 设为实验目录根（s2_dir）
-    data["s2_ckpt_dir"] = exp_dir
-    
-    # 设置实验名称
+    data["data"]["exp_dir"] = data["s2_ckpt_dir"] = s2_dir
+    data["save_weight_dir"] = SoVITS_weight_version2root[version]
     data["name"] = exp_name
     data["version"] = version
     
@@ -68,7 +77,7 @@ def generate_s2_config(
         print(f"配置文件已生成: {output_path}")
 
 if __name__ == "__main__":
-    # 从环境变量读取参数
+    # 从环境变量读取参数，与webui.py和test_demo.sh一致
     version = os.environ.get("S2_VERSION", "v2ProPlus")
     batch_size = int(os.environ.get("BATCH_SIZE", "16"))
     total_epoch = int(os.environ.get("EPOCHS_S2", "50"))
@@ -79,6 +88,15 @@ if __name__ == "__main__":
     gpu_numbers = os.environ.get("_CUDA_VISIBLE_DEVICES", "0")
     output_path = sys.argv[1] if len(sys.argv) > 1 else None
     
+    # 从环境变量读取其他参数，使用webui.py中的默认值
+    text_low_lr_rate = float(os.environ.get("TEXT_LOW_LR_RATE", "0.4"))
+    if_save_latest = os.environ.get("IF_SAVE_LATEST", "True").lower() == "true"
+    if_save_every_weights = os.environ.get("IF_SAVE_EVERY_WEIGHTS", "True").lower() == "true"
+    save_every_epoch = int(os.environ.get("SAVE_EVERY_EPOCH_S2", "4"))
+    if_grad_ckpt = os.environ.get("IF_GRAD_CKPT", "False").lower() == "true"
+    lora_rank = int(os.environ.get("LORA_RANK", "32"))
+    is_half = os.environ.get("is_half", "True").lower() == "true"
+    
     generate_s2_config(
         version=version,
         batch_size=batch_size,
@@ -88,5 +106,12 @@ if __name__ == "__main__":
         pretrained_s2G=pretrained_s2G,
         pretrained_s2D=pretrained_s2D,
         gpu_numbers=gpu_numbers,
+        text_low_lr_rate=text_low_lr_rate,
+        if_save_latest=if_save_latest,
+        if_save_every_weights=if_save_every_weights,
+        save_every_epoch=save_every_epoch,
+        if_grad_ckpt=if_grad_ckpt,
+        lora_rank=lora_rank,
+        is_half=is_half,
         output_path=output_path
     )

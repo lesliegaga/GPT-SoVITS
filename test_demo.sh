@@ -296,30 +296,12 @@ fi
 # 步骤8: GPT模型训练
 log_info "步骤8/9: GPT模型训练..."
 
+# 设置GPT训练所需的环境变量
+export pretrained_s1="$PRETRAINED_S1"
+export hz="25hz"
+
 # 创建GPT训练配置
-cat > "$WORK_DIR/config_s1.yaml" << EOF
-model:
-  t2s_model_path: $EXP_DIR/logs_s1/G_*.pth
-  symbols_path: GPT_SoVITS/text/symbols.py
-
-train:
-  batch_size: $BATCH_SIZE
-  epochs: $EPOCHS_S1
-  learning_rate: 0.0001
-  save_every_n_epoch: 5
-  if_save_every_weights: true
-  if_save_latest: false
-  if_dpo: false
-  half_weights_save_dir: $EXP_DIR/SoVITS_weights
-  exp_name: $EXP_NAME
-
-data:
-  train_semantic_path: $EXP_DIR/6-name2semantic.tsv
-  train_phoneme_path: $EXP_DIR/2-name2text.txt
-
-output_dir: $EXP_DIR/logs_s1
-pretrained_s1: $PRETRAINED_S1
-EOF
+python generate_s1_config.py "$WORK_DIR/config_s1.yaml"
 
 # 执行GPT训练
 python GPT_SoVITS/s1_train.py --config_file "$WORK_DIR/config_s1.yaml"
@@ -342,27 +324,90 @@ log_info "找到模型文件:"
 log_info "GPT模型: $GPT_MODEL"
 log_info "SoVITS模型: $SOVITS_MODEL"
 
+# 自动选择参考音频和文本
+log_info "自动选择参考音频和文本..."
+
+# 创建输出目录
+mkdir -p "$WORK_DIR/output"
+
+# 从训练集中选择一个合适的参考音频（选择第一个音频文件）
+REF_AUDIO=$(find "$DENOISED_DIR" -name "*.wav" | head -1)
+if [[ -z "$REF_AUDIO" ]]; then
+    log_error "在训练集中找不到音频文件"
+fi
+
+# 获取音频文件名（不含路径）
+AUDIO_FILENAME=$(basename "$REF_AUDIO")
+log_info "选择参考音频: $AUDIO_FILENAME"
+
+# 从 .list 文件中提取对应的文本内容
+if [[ -f "$ASR_OUTPUT" ]]; then
+    # 查找包含该音频文件名的行
+    REF_TEXT_LINE=$(grep "$AUDIO_FILENAME" "$ASR_OUTPUT" | head -1)
+    if [[ -n "$REF_TEXT_LINE" ]]; then
+        # 解析 .list 文件格式：file_path|output_file_name|language|text
+        # 文本内容在第4个字段（用 | 分隔）
+        REF_TEXT_CONTENT=$(echo "$REF_TEXT_LINE" | cut -d'|' -f4)
+        if [[ -z "$REF_TEXT_CONTENT" ]]; then
+            # 如果第4个字段为空，尝试其他分隔符
+            REF_TEXT_CONTENT=$(echo "$REF_TEXT_LINE" | cut -d'\t' -f2-)
+        fi
+        if [[ -z "$REF_TEXT_CONTENT" ]]; then
+            # 如果还是没有，使用整行作为文本
+            REF_TEXT_CONTENT="$REF_TEXT_LINE"
+        fi
+        log_info "从转录文件提取文本: $REF_TEXT_CONTENT"
+    else
+        log_error "在转录文件中找不到音频 $AUDIO_FILENAME 对应的文本"
+    fi
+else
+    log_error "转录文件不存在: $ASR_OUTPUT"
+fi
+
+# 创建参考文本文件
+REF_TEXT_FILE="$WORK_DIR/ref_text.txt"
+echo "$REF_TEXT_CONTENT" > "$REF_TEXT_FILE"
+log_info "创建参考文本文件: $REF_TEXT_FILE"
+log_info "参考文本内容: $REF_TEXT_CONTENT"
+
+# 创建目标文本文件（示例文本）
+TARGET_TEXT_FILE="$WORK_DIR/target_text.txt"
+cat > "$TARGET_TEXT_FILE" << 'TARGET_EOF'
+这是一个测试文本，用于验证训练好的模型效果。
+请根据实际需要修改此文件中的内容。
+TARGET_EOF
+log_info "创建目标文本文件: $TARGET_TEXT_FILE"
+
 # 创建推理测试脚本
 cat > "$WORK_DIR/test_inference.sh" << EOF
 #!/bin/bash
 
 # 使用训练好的模型进行推理测试
-# 需要准备参考音频和文本
+# 参考音频和文本已自动选择
 
-# 示例：
-# python GPT_SoVITS/inference_cli.py \\
-#     --gpt_model "$GPT_MODEL" \\
-#     --sovits_model "$SOVITS_MODEL" \\
-#     --ref_audio "/path/to/reference_audio.wav" \\
-#     --ref_text "/path/to/reference_text.txt" \\
-#     --ref_language "中文" \\
-#     --target_text "/path/to/target_text.txt" \\
-#     --target_language "中文" \\
-#     --output_path "$WORK_DIR/output"
+echo "使用以下文件进行推理测试："
+echo "参考音频: $REF_AUDIO"
+echo "参考文本: $REF_TEXT_FILE"
+echo "目标文本: $TARGET_TEXT_FILE"
+echo ""
 
-echo "请修改此脚本中的参考音频和文本路径，然后运行推理测试"
-echo "GPT模型路径: $GPT_MODEL"
-echo "SoVITS模型路径: $SOVITS_MODEL"
+# 执行推理
+python GPT_SoVITS/inference_cli.py \\
+    --gpt_model "$GPT_MODEL" \\
+    --sovits_model "$SOVITS_MODEL" \\
+    --ref_audio "$REF_AUDIO" \\
+    --ref_text "$REF_TEXT_FILE" \\
+    --ref_language "中文" \\
+    --target_text "$TARGET_TEXT_FILE" \\
+    --target_language "中文" \\
+    --output_path "$WORK_DIR/output" \\
+    --bert_path "GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large" \\
+    --cnhubert_base_path "GPT_SoVITS/pretrained_models/chinese-hubert-base" \\
+    --gpu_number "0" \\
+    --is_half
+
+echo ""
+echo "推理完成！输出文件保存在: $WORK_DIR/output/output.wav"
 EOF
 
 chmod +x "$WORK_DIR/test_inference.sh"
@@ -376,11 +421,18 @@ echo ""
 echo "python GPT_SoVITS/inference_cli.py \\"
 echo "    --gpt_model \"$GPT_MODEL\" \\"
 echo "    --sovits_model \"$SOVITS_MODEL\" \\"
-echo "    --ref_audio \"/path/to/reference_audio.wav\" \\"
-echo "    --ref_text \"/path/to/reference_text.txt\" \\"
+echo "    --ref_audio \"$REF_AUDIO\" \\"
+echo "    --ref_text \"$REF_TEXT_FILE\" \\"
 echo "    --ref_language \"中文\" \\"
-echo "    --target_text \"/path/to/target_text.txt\" \\"
+echo "    --target_text \"$TARGET_TEXT_FILE\" \\"
 echo "    --target_language \"中文\" \\"
-echo "    --output_path \"$WORK_DIR/output\""
+echo "    --output_path \"$WORK_DIR/output\" \\"
+echo "    --bert_path \"GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large\" \\"
+echo "    --cnhubert_base_path \"GPT_SoVITS/pretrained_models/chinese-hubert-base\" \\"
+echo "    --gpu_number \"0\" \\"
+echo "    --is_half"
+echo ""
+echo "或者直接运行自动生成的测试脚本:"
+echo "bash \"$WORK_DIR/test_inference.sh\""
 echo ""
 log_info "训练完成！"
