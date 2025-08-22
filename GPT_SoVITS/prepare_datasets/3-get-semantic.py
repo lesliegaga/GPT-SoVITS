@@ -10,6 +10,26 @@ opt_dir = os.environ.get("opt_dir")
 pretrained_s2G = os.environ.get("pretrained_s2G")
 s2config_path = os.environ.get("s2config_path")
 
+# 如果没有设置pretrained_s2G环境变量，从config.py中读取
+if not pretrained_s2G:
+    try:
+        # 获取版本信息
+        version = os.environ.get("S2_VERSION", "v2ProPlus")
+        
+        # 动态导入config模块
+        import sys
+        sys.path.append(os.getcwd())
+        from config import pretrained_sovits_name
+        
+        if version in pretrained_sovits_name and pretrained_sovits_name[version]:
+            pretrained_s2G = pretrained_sovits_name[version]
+            print(f"从config.py读取{version}版本的SoVITS-G预训练模型: {pretrained_s2G}")
+        else:
+            raise ValueError(f"在config.py中找不到{version}版本的SoVITS-G预训练模型")
+    except Exception as e:
+        print(f"警告: 无法从config.py读取预训练模型路径: {e}")
+        print("请确保设置了pretrained_s2G环境变量或S2_VERSION环境变量")
+
 if os.path.exists(pretrained_s2G):
     ...
 else:

@@ -173,6 +173,8 @@ export s2config_path="GPT_SoVITS/configs/s2v2ProPlus.json"
 export is_half="True"
 export BATCH_SIZE="$BATCH_SIZE"
 export EPOCHS_S2="$EPOCHS_S2"
+# 提前设置S2_VERSION，确保3-get-semantic.py能够正确读取版本信息
+export S2_VERSION="v2ProPlus"
 
 ### 并行分片设置（按 GPU_ID 形如 "0" 或 "0-1-2" 解析）
 gpu_names=(${GPU_ID//-/ })
@@ -276,7 +278,6 @@ log_info "==================== 开始模型训练 ===================="
 log_info "步骤7/9: SoVITS模型训练..."
 
 # 创建SoVITS训练配置
-export S2_VERSION="v2ProPlus"
 python generate_s2_config.py "$WORK_DIR/config_s2.json"
 
 # 执行SoVITS训练
