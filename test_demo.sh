@@ -305,8 +305,10 @@ fi
 log_info "==================== 步骤9/9: 推理测试准备 ===================="
 
 # 查找训练好的模型
-GPT_MODEL=$(ls $EXP_DIR/logs_s1/*-e*.ckpt | tail -1)
-SOVITS_MODEL=$(ls $EXP_DIR/logs_s2/G_*.pth | tail -1)
+# 注意：根据webui.py的配置，GPT模型保存在logs_s1_版本号目录下，SoVITS模型保存在logs_s2_版本号目录下
+# GPT模型文件保存在ckpt子目录中，SoVITS模型文件直接在logs_s2_版本号目录下
+GPT_MODEL=$(ls $EXP_DIR/logs_s1_${S2_VERSION}/ckpt/*-e*.ckpt | tail -1)
+SOVITS_MODEL=$(ls $EXP_DIR/logs_s2_${S2_VERSION}/G_*.pth | tail -1)
 
 if [[ -z "$GPT_MODEL" ]] || [[ -z "$SOVITS_MODEL" ]]; then
     log_error "找不到训练好的模型文件"

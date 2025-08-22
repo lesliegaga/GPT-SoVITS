@@ -105,7 +105,10 @@ def main(args):
         every_n_epochs=config["train"]["save_every_n_epoch"],
         dirpath=ckpt_dir,
     )
-    logger = TensorBoardLogger(name=output_dir.stem, save_dir=output_dir)
+    # 修复：避免目录嵌套，使用更合理的目录结构
+    # 原来的设置会导致 logs_s1_v2ProPlus/logs_s1_v2ProPlus/version_0/ 的嵌套
+    # 现在改为 logs_s1_v2ProPlus/version_0/ 的扁平结构
+    logger = TensorBoardLogger(name="", save_dir=output_dir, version="")
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["USE_LIBUV"] = "0"
     trainer: Trainer = Trainer(
