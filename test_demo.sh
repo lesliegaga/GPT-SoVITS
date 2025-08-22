@@ -12,12 +12,9 @@ SLICED_DIR="$WORK_DIR/sliced"
 DENOISED_DIR="$WORK_DIR/denoised"
 ASR_OUTPUT="$WORK_DIR/transcripts"
 
-# 预训练模型路径
+# 预训练模型路径 - 从config.py中读取，而不是硬编码
 BERT_DIR="GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"
 CNHUBERT_DIR="GPT_SoVITS/pretrained_models/chinese-hubert-base"
-PRETRAINED_S2G="GPT_SoVITS/pretrained_models/v2Pro/s2Gv2ProPlus.pth"
-PRETRAINED_S2D="GPT_SoVITS/pretrained_models/v2Pro/s2Dv2ProPlus.pth"
-PRETRAINED_S1="GPT_SoVITS/pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt"
 PRETRAINED_SV="GPT_SoVITS/pretrained_models/sv/pretrained_eres2netv2w24s4ep4.ckpt"
 
 # 训练参数
@@ -52,9 +49,6 @@ check_dir_exists() {
 # ==================== 环境检查 ====================
 log_info "检查环境和依赖文件..."
 check_dir_exists "$INPUT_AUDIO"
-check_file_exists "$PRETRAINED_S2G"
-check_file_exists "$PRETRAINED_S1"
-check_file_exists "$PRETRAINED_SV"
 
 # ==================== 创建工作目录 ====================
 log_info "创建工作目录..."
@@ -174,8 +168,6 @@ export exp_name="$EXP_NAME"
 export opt_dir="$EXP_DIR"
 export bert_pretrained_dir="$BERT_DIR"
 export cnhubert_base_dir="$CNHUBERT_DIR"
-export pretrained_s2G="$PRETRAINED_S2G"
-export pretrained_s2D="$PRETRAINED_S2D"
 export sv_path="$PRETRAINED_SV"
 export s2config_path="GPT_SoVITS/configs/s2v2ProPlus.json"
 export is_half="True"
@@ -297,7 +289,6 @@ fi
 log_info "步骤8/9: GPT模型训练..."
 
 # 设置GPT训练所需的环境变量
-export pretrained_s1="$PRETRAINED_S1"
 export hz="25hz"
 
 # 创建GPT训练配置

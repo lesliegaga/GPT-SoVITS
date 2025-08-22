@@ -8,7 +8,7 @@
 import yaml
 import sys
 import os
-from config import GPT_weight_version2root, exp_root
+from config import GPT_weight_version2root, exp_root, pretrained_gpt_name
 
 def generate_s1_config(
     version="v2ProPlus",
@@ -49,6 +49,14 @@ def generate_s1_config(
         data["train"]["precision"] = "32"
         batch_size = max(1, batch_size // 2)
     
+    # 如果没有指定pretrained_s1，从config.py中读取（与webui.py逻辑一致）
+    if pretrained_s1 is None or pretrained_s1 == "":
+        if version in pretrained_gpt_name and pretrained_gpt_name[version]:
+            pretrained_s1 = pretrained_gpt_name[version]
+            print(f"从config.py读取{version}版本的GPT预训练模型: {pretrained_s1}")
+        else:
+            print(f"警告: 在config.py中找不到{version}版本的GPT预训练模型")
+    
     # 按照webui.py的逻辑设置训练参数
     data["train"]["batch_size"] = batch_size
     data["train"]["epochs"] = total_epoch
@@ -78,7 +86,7 @@ if __name__ == "__main__":
     total_epoch = int(os.environ.get("EPOCHS_S1", "15"))
     exp_name = os.environ.get("exp_name", "my_speaker")
     exp_dir = os.environ.get("opt_dir", "")
-    pretrained_s1 = os.environ.get("pretrained_s1", "")
+    pretrained_s1 = os.environ.get("pretrained_s1", "")  # 如果为空，会自动从config.py读取
     gpu_numbers = os.environ.get("_CUDA_VISIBLE_DEVICES", "0")
     output_path = sys.argv[1] if len(sys.argv) > 1 else None
     
