@@ -33,7 +33,7 @@ def get_trained_models():
         # GPT_names[-1] - 选择最新的GPT模型（列表中的最后一个）
         # SoVITS_names[0] - 选择第一个SoVITS模型
         gpt_model = GPT_names[-1] if GPT_names else ""
-        sovits_model = SoVITS_names[0] if SoVITS_names else ""
+        sovits_model = SoVITS_names[-1] if SoVITS_names else ""
         
         # 验证模型文件是否存在
         if gpt_model and not os.path.exists(gpt_model):
