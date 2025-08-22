@@ -44,6 +44,8 @@ def generate_s2_config(
     
     # 设置实验目录路径，与webui.py一致
     s2_dir = "%s/%s" % (exp_root, exp_name)
+    if exp_dir is not None:
+        s2_dir = exp_dir
     
     # 按照webui.py的逻辑处理is_half
     if is_half == False:
