@@ -108,6 +108,8 @@ def get_weights_names():
                 GPT_names.append("%s/%s" % (path, name))
     SoVITS_names = sorted(SoVITS_names, key=custom_sort_key)
     GPT_names = sorted(GPT_names, key=custom_sort_key)
+    print(GPT_names)
+    print(SoVITS_names)
     if not GPT_names:
         GPT_names = [""]
     return SoVITS_names, GPT_names
