@@ -8,32 +8,104 @@
 import os
 import sys
 import json
+import re
 
 # 添加当前目录到Python路径，以便导入config模块
 sys.path.insert(0, os.getcwd())
 
 try:
-    from config import get_weights_names
+    from config import GPT_weight_version2root, SoVITS_weight_version2root
 except ImportError:
     print("错误：无法导入config模块，请确保在GPT-SoVITS根目录下运行此脚本")
     sys.exit(1)
 
+def get_final_step_model(directory, file_extension):
+    """
+    获取指定目录下最终step的训练模型路径
+    
+    Args:
+        directory: 模型目录路径
+        file_extension: 文件扩展名（.ckpt或.pth）
+    
+    Returns:
+        str: 最终step的模型文件路径，如果没有找到则返回空字符串
+    """
+    if not os.path.exists(directory):
+        return ""
+    
+    try:
+        # 获取目录下所有指定扩展名的文件
+        files = [f for f in os.listdir(directory) if f.endswith(file_extension)]
+        if not files:
+            return ""
+        
+        # 解析文件名中的step信息，找到最终的step
+        final_model = ""
+        max_step = -1
+        
+        for file in files:
+            # 尝试从文件名中提取step信息
+            # 支持多种命名格式：
+            # - my_speaker-e15.ckpt (epoch格式)
+            # - my_speaker_step_1000.ckpt (step格式)
+            # - my_speaker_1000.ckpt (数字格式)
+            
+            step = -1
+            
+            # 尝试匹配epoch格式：my_speaker-e15.ckpt
+            epoch_match = re.search(r'-e(\d+)', file)
+            if epoch_match:
+                step = int(epoch_match.group(1))
+            
+            # 尝试匹配step格式：my_speaker_step_1000.ckpt
+            if step == -1:
+                step_match = re.search(r'step_(\d+)', file)
+                if step_match:
+                    step = int(step_match.group(1))
+            
+            # 尝试匹配纯数字格式：my_speaker_1000.ckpt
+            if step == -1:
+                num_match = re.search(r'_(\d+)\.', file)
+                if num_match:
+                    step = int(num_match.group(1))
+            
+            # 如果找到更大的step，更新最终模型
+            if step > max_step:
+                max_step = step
+                final_model = file
+        
+        if final_model:
+            return os.path.join(directory, final_model)
+        else:
+            return ""
+            
+    except Exception as e:
+        print(f"警告：读取目录 {directory} 时发生错误: {e}")
+        return ""
+
 def get_trained_models():
     """
-    获取训练好的模型路径，完全复用webui.py的逻辑
+    获取训练好的模型路径，使用GPT_weight_version2root[version]和SoVITS_weight_version2root[version]目录下最终step的训练模型
     
     Returns:
         tuple: (gpt_model_path, sovits_model_path)
     """
     try:
-        # 复用webui.py中的get_weights_names函数
-        SoVITS_names, GPT_names = get_weights_names()
+        # 从环境变量获取版本信息
+        version = os.environ.get("S2_VERSION", "v2ProPlus")
         
-        # 按照webui.py的逻辑选择模型：
-        # GPT_names[-1] - 选择最新的GPT模型（列表中的最后一个）
-        # SoVITS_names[0] - 选择第一个SoVITS模型
-        gpt_model = GPT_names[-1] if GPT_names else ""
-        sovits_model = SoVITS_names[0] if SoVITS_names else ""
+        # 获取版本对应的权重目录
+        gpt_weight_dir = GPT_weight_version2root.get(version, "")
+        sovits_weight_dir = SoVITS_weight_version2root.get(version, "")
+        
+        if not gpt_weight_dir:
+            print(f"警告：找不到版本 {version} 对应的GPT权重目录")
+        if not sovits_weight_dir:
+            print(f"警告：找不到版本 {version} 对应的SoVITS权重目录")
+        
+        # 获取最终step的模型路径
+        gpt_model = get_final_step_model(gpt_weight_dir, ".ckpt")
+        sovits_model = get_final_step_model(sovits_weight_dir, ".pth")
         
         # 验证模型文件是否存在
         if gpt_model and not os.path.exists(gpt_model):
