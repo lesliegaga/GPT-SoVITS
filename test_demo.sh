@@ -305,13 +305,41 @@ fi
 log_info "==================== 步骤9/9: 推理测试准备 ===================="
 
 # 查找训练好的模型
-# 注意：根据webui.py的配置，GPT模型保存在logs_s1_版本号目录下，SoVITS模型保存在logs_s2_版本号目录下
-# GPT模型文件保存在ckpt子目录中，SoVITS模型文件直接在logs_s2_版本号目录下
-GPT_MODEL=$(ls $EXP_DIR/logs_s1_${S2_VERSION}/ckpt/*-e*.ckpt | tail -1)
-SOVITS_MODEL=$(ls $EXP_DIR/logs_s2_${S2_VERSION}/G_*.pth | tail -1)
+# 注意：必须复用webui.py中get_weights_names的逻辑，确保与webui.py的处理完全一致
+# 使用Python脚本获取模型路径，而不是shell通配符
+log_info "使用Python脚本获取训练好的模型路径..."
 
+# 调用Python脚本获取模型路径，完全复用webui.py的逻辑
+MODEL_INFO=$(python get_trained_models.py 2>/dev/null)
+if [[ $? -ne 0 ]]; then
+    log_error "获取模型路径失败，请检查Python脚本和config.py"
+fi
+
+# 解析JSON输出获取模型路径
+GPT_MODEL=$(echo "$MODEL_INFO" | python -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data.get('gpt_model', ''))
+except:
+    print('')
+")
+
+SOVITS_MODEL=$(echo "$MODEL_INFO" | python -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data.get('sovits_model', ''))
+except:
+    print('')
+")
+
+# 验证模型路径
 if [[ -z "$GPT_MODEL" ]] || [[ -z "$SOVITS_MODEL" ]]; then
     log_error "找不到训练好的模型文件"
+    log_error "GPT模型: $GPT_MODEL"
+    log_error "SoVITS模型: $SOVITS_MODEL"
+    log_error "请检查模型是否已训练完成"
 fi
 
 log_info "找到模型文件:"
