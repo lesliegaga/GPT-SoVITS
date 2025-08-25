@@ -88,7 +88,7 @@ class TrainingService:
     """训练服务核心类"""
     
     def __init__(self):
-        self.base_dir = Path("/Users/zhujiayan/Documents/Github/GPT-SoVITS")
+        self.base_dir = Path("~/workspace/git/GPT-SoVITS")
         self.work_dir = self.base_dir / "api_tasks"
         self.work_dir.mkdir(exist_ok=True)
         self.step_processor = StepProcessor(str(self.base_dir))
