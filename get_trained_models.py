@@ -46,16 +46,24 @@ def get_final_step_model(directory, file_extension):
         for file in files:
             # 尝试从文件名中提取step信息
             # 支持多种命名格式：
-            # - my_speaker-e15.ckpt (epoch格式)
+            # - my_speaker-e15.ckpt (epoch格式，GPT模型)
+            # - my_speaker_e48_s336.pth (epoch_step格式，SoVITS模型)
             # - my_speaker_step_1000.ckpt (step格式)
-            # - my_speaker_1000.ckpt (数字格式)
+            # - my_speaker_1000.ckpt (纯数字格式)
             
             step = -1
             
-            # 尝试匹配epoch格式：my_speaker-e15.ckpt
+            # 尝试匹配epoch格式：my_speaker-e15.ckpt (GPT模型)
             epoch_match = re.search(r'-e(\d+)', file)
             if epoch_match:
                 step = int(epoch_match.group(1))
+            
+            # 尝试匹配epoch_step格式：my_speaker_e48_s336.pth (SoVITS模型)
+            if step == -1:
+                epoch_step_match = re.search(r'_e(\d+)_s(\d+)', file)
+                if epoch_step_match:
+                    # 对于SoVITS模型，使用step值（第二个数字）作为排序依据
+                    step = int(epoch_step_match.group(2))
             
             # 尝试匹配step格式：my_speaker_step_1000.ckpt
             if step == -1:
