@@ -702,11 +702,23 @@ if __name__ == "__main__":
     logger.info(f"🔄 自动重载: {'开启' if args.reload else '关闭'}")
     logger.info("=" * 50)
     
-    uvicorn.run(
-        app, 
-        host=host, 
-        port=port,
-        workers=workers,
-        log_level=log_level,
-        reload=args.reload
-    )
+    if args.reload:
+        # 使用 reload 模式时，必须使用模块导入字符串
+        uvicorn.run(
+            "training_service:app",
+            host=host, 
+            port=port,
+            workers=1,  # reload 模式下 workers 必须为 1
+            log_level=log_level,
+            reload=True
+        )
+    else:
+        # 非 reload 模式时，可以直接传递应用对象
+        uvicorn.run(
+            app, 
+            host=host, 
+            port=port,
+            workers=workers,
+            log_level=log_level,
+            reload=False
+        )
