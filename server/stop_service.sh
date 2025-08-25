@@ -92,7 +92,7 @@ force_stop_all() {
     fi
     
     # 查找gunicorn进程
-    local gunicorn_pids=$(pgrep -f "gunicorn.*training_service" 2>/dev/null || true)
+    local gunicorn_pids=$(pgrep -f "gunicorn.*server.training_service" 2>/dev/null || true)
     if [[ -n "$gunicorn_pids" ]]; then
         log_info "发现gunicorn进程: $gunicorn_pids"
         for pid in $gunicorn_pids; do
@@ -123,7 +123,7 @@ force_stop_all() {
     if [[ "$FORCE_KILL" != true ]]; then
         sleep 2
         # 检查是否还有残留进程
-        local remaining=$(pgrep -f "training_service|gunicorn.*training_service|uvicorn.*training_service" 2>/dev/null || true)
+        local remaining=$(pgrep -f "training_service|gunicorn.*server.training_service|uvicorn.*training_service" 2>/dev/null || true)
         if [[ -n "$remaining" ]]; then
             log_warn "发现残留进程，强制终止: $remaining"
             for pid in $remaining; do
@@ -182,7 +182,7 @@ check_status() {
     fi
     
     # 检查进程
-    local pids=$(pgrep -f "training_service|gunicorn.*training_service|uvicorn.*training_service" 2>/dev/null || true)
+    local pids=$(pgrep -f "training_service|gunicorn.*server.training_service|uvicorn.*training_service" 2>/dev/null || true)
     if [[ -n "$pids" ]]; then
         log_info "发现相关进程: $pids"
         running=true

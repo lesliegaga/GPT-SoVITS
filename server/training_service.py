@@ -23,8 +23,17 @@ from pydantic import BaseModel, Field
 import uvicorn
 
 # 导入步骤处理器和配置
-from training_steps import StepProcessor, ConfigGenerator
-from service_config import get_base_path, get_work_dir, get_model_paths
+import os
+
+# 根据运行环境选择导入方式
+if os.getenv('GPT_SOVITS_SERVER_MODE') == 'standalone':
+    # 独立运行模式（从server目录直接运行）
+    from training_steps import StepProcessor, ConfigGenerator
+    from service_config import get_base_path, get_work_dir, get_model_paths
+else:
+    # 包模式（从根目录导入）
+    from .training_steps import StepProcessor, ConfigGenerator
+    from .service_config import get_base_path, get_work_dir, get_model_paths
 
 # 配置日志
 logging.basicConfig(
@@ -681,12 +690,18 @@ if __name__ == "__main__":
     
     # 如果只是显示配置，则显示后退出
     if args.config:
-        from service_config import print_config
+        if os.getenv('GPT_SOVITS_SERVER_MODE') == 'standalone':
+            from service_config import print_config
+        else:
+            from .service_config import print_config
         print_config()
         exit(0)
     
     # 导入配置
-    from service_config import SERVICE_CONFIG
+    if os.getenv('GPT_SOVITS_SERVER_MODE') == 'standalone':
+        from service_config import SERVICE_CONFIG
+    else:
+        from .service_config import SERVICE_CONFIG
     
     # 使用命令行参数覆盖配置文件，如果没有指定则使用配置文件的值
     host = args.host or SERVICE_CONFIG["host"]
@@ -705,7 +720,7 @@ if __name__ == "__main__":
     if args.reload:
         # 使用 reload 模式时，必须使用模块导入字符串
         uvicorn.run(
-            "training_service:app",
+            "server.training_service:app",
             host=host, 
             port=port,
             workers=1,  # reload 模式下 workers 必须为 1

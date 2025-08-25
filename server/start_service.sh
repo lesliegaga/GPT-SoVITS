@@ -130,6 +130,8 @@ start_development() {
     log_info "API文档: http://${HOST}:${PORT}/docs"
     log_info "按 Ctrl+C 停止服务"
     
+    # 设置独立运行模式环境变量
+    export GPT_SOVITS_SERVER_MODE=standalone
     python3 training_service.py
 }
 
@@ -154,7 +156,7 @@ start_production() {
         --log-level $LOG_LEVEL \
         --access-logfile - \
         --error-logfile - \
-        training_service:app
+        server.training_service:app
 }
 
 # 后台运行服务
@@ -175,12 +177,13 @@ start_daemon() {
             --error-logfile logs/error.log \
             --pid logs/training_service.pid \
             --daemon \
-            training_service:app
+            server.training_service:app
         
         log_info "生产模式服务已启动"
         log_info "PID文件: logs/training_service.pid"
     else
         # 开发模式后台运行
+        export GPT_SOVITS_SERVER_MODE=standalone
         nohup python3 training_service.py > logs/service.log 2>&1 &
         echo $! > logs/training_service.pid
         log_info "开发模式服务已启动"
