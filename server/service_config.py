@@ -58,8 +58,10 @@ def get_base_path() -> Path:
     if not base_path.exists():
         # 尝试一些常见的路径
         common_paths = [
+            Path.cwd().parent,  # 当前目录的父目录（如果在server目录下）
             Path.cwd(),  # 当前目录
             Path.home() / "workspace/git/GPT-SoVITS",
+            Path.home() / "Documents/Github/GPT-SoVITS",  # 修正GitHub拼写
             Path.home() / "Documents/GitHub/GPT-SoVITS",
             Path.home() / "git/GPT-SoVITS",
             Path("/home/tongyan.zjy/workspace/git/GPT-SoVITS"),  # 用户提到的路径
@@ -67,9 +69,16 @@ def get_base_path() -> Path:
         
         for common_path in common_paths:
             if common_path.exists():
-                print(f"⚠️  配置的路径不存在: {base_path}")
-                print(f"✅ 使用发现的路径: {common_path}")
-                return common_path
+                # 验证这是否是GPT-SoVITS根目录（检查关键文件/目录）
+                gpt_sovits_markers = [
+                    common_path / "GPT_SoVITS",
+                    common_path / "config.py",
+                    common_path / "webui.py"
+                ]
+                if any(marker.exists() for marker in gpt_sovits_markers):
+                    print(f"⚠️  配置的路径不存在: {base_path}")
+                    print(f"✅ 使用发现的路径: {common_path}")
+                    return common_path
         
         # 如果都找不到，使用当前目录
         print(f"⚠️  无法找到GPT-SoVITS目录，使用当前目录: {Path.cwd()}")

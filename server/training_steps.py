@@ -9,6 +9,7 @@ import json
 import subprocess
 import asyncio
 import shutil
+import yaml
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 import logging
@@ -342,86 +343,50 @@ class ConfigGenerator:
         self.base_dir = Path(base_dir)
     
     def generate_s2_config(self, task_config: Dict[str, Any], output_path: str) -> bool:
-        """生成SoVITS训练配置"""
+        """生成SoVITS训练配置，与generate_s2_config.py逻辑完全一致"""
         try:
-            s2_config = {
-                "train": {
-                    "log_interval": 100,
-                    "eval_interval": 500,
-                    "seed": 1234,
-                    "epochs": task_config["EPOCHS_S2"],
-                    "learning_rate": 0.0001,
-                    "betas": [0.8, 0.99],
-                    "eps": 1e-9,
-                    "batch_size": task_config["BATCH_SIZE"],
-                    "fp16_run": True,
-                    "lr_decay": 0.999875,
-                    "segment_size": 20480,
-                    "init_lr_ratio": 1,
-                    "warmup_epochs": 0,
-                    "c_mel": 45,
-                    "c_kl": 1.0,
-                    "use_sr": True,
-                    "max_speclen": 512,
-                    "port": "8001",
-                    "cache_all_data": True,
-                    "cache_device": "cpu",
-                    "amp_dtype": "float16"
-                },
-                "data": {
-                    "exp_dir": task_config["EXP_DIR"],
-                    "training_files": os.path.join(task_config["EXP_DIR"], "2-name2text.txt"),
-                    "max_wav_value": 32768.0,
-                    "sampling_rate": 32000,
-                    "filter_length": 2048,
-                    "hop_length": 320,
-                    "win_length": 2048,
-                    "n_mel_channels": 128,
-                    "mel_fmin": 0.0,
-                    "mel_fmax": "null",
-                    "add_blank": True,
-                    "n_speakers": 300,
-                    "cleaned_text": True,
-                    "exp_dir": task_config["EXP_DIR"]
-                },
-                "model": {
-                    "ms_istft_vits": True,
-                    "mb_istft_vits": False,
-                    "istft_vits": False,
-                    "subbands": 4,
-                    "gen_istft_n_fft": 2048,
-                    "gen_istft_hop_size": 320,
-                    "gen_istft_win_size": 2048,
-                    "spec_bwd_max_iter": 8,
-                    "inter_channels": 192,
-                    "hidden_channels": 192,
-                    "filter_channels": 768,
-                    "n_heads": 2,
-                    "n_layers": 6,
-                    "kernel_size": 3,
-                    "p_dropout": 0.1,
-                    "resblock": "1",
-                    "resblock_kernel_sizes": [3, 7, 11],
-                    "resblock_dilation_sizes": [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
-                    "upsample_rates": [10, 8, 2, 2],
-                    "upsample_initial_channel": 512,
-                    "upsample_kernel_sizes": [16, 16, 4, 4],
-                    "n_layers_q": 3,
-                    "use_spectral_norm": False,
-                    "gin_channels": 512,
-                    "ssl_dim": 1024,
-                    "n_speakers": 300,
-                    "speaker_embedding": True
-                },
-                "s2_ckpt_dir": task_config["EXP_DIR"],
-                "content_module": "cnhubert",
-                "save_every_epoch": 5,
-                "name": task_config["EXP_NAME"],
-                "version": "v2Pro"
-            }
+            # 按照webui.py的逻辑选择基础配置文件
+            version = task_config.get("VERSION", "v2ProPlus")
+            config_file = (
+                self.base_dir / "GPT_SoVITS/configs/s2.json"
+                if version not in {"v2Pro", "v2ProPlus"}
+                else self.base_dir / f"GPT_SoVITS/configs/s2{version}.json"
+            )
+            
+            # 加载基础配置文件，与webui.py完全一致
+            with open(config_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # 设置实验目录路径
+            s2_dir = task_config["EXP_DIR"]
+            
+            # 按照webui.py的逻辑处理is_half
+            batch_size = task_config["BATCH_SIZE"]
+            is_half = task_config.get("IS_HALF", True)
+            if is_half == False:
+                data["train"]["fp16_run"] = False
+                batch_size = max(1, batch_size // 2)
+            
+            # 设置训练参数（与generate_s2_config.py完全一致）
+            gpu_numbers = task_config.get("GPU_ID", "0")
+            data["train"]["batch_size"] = batch_size
+            data["train"]["epochs"] = task_config["EPOCHS_S2"]
+            data["train"]["text_low_lr_rate"] = task_config.get("TEXT_LOW_LR_RATE", 0.4)
+            data["train"]["pretrained_s2G"] = task_config.get("PRETRAINED_S2G", "")
+            data["train"]["pretrained_s2D"] = task_config.get("PRETRAINED_S2D", "")
+            data["train"]["if_save_latest"] = task_config.get("IF_SAVE_LATEST", True)
+            data["train"]["if_save_every_weights"] = task_config.get("IF_SAVE_EVERY_WEIGHTS", True)
+            data["train"]["save_every_epoch"] = task_config.get("SAVE_EVERY_EPOCH_S2", 4)
+            data["train"]["gpu_numbers"] = gpu_numbers  # 关键：添加缺失的gpu_numbers字段
+            data["train"]["grad_ckpt"] = task_config.get("IF_GRAD_CKPT", False)
+            data["train"]["lora_rank"] = task_config.get("LORA_RANK", 32)
+            data["model"]["version"] = version
+            data["data"]["exp_dir"] = data["s2_ckpt_dir"] = s2_dir
+            data["name"] = task_config["EXP_NAME"]
+            data["version"] = version
             
             with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(s2_config, f, indent=2, ensure_ascii=False)
+                json.dump(data, f, indent=2, ensure_ascii=False)
             
             logger.info(f"S2配置文件生成成功: {output_path}")
             return True
@@ -431,34 +396,47 @@ class ConfigGenerator:
             return False
     
     def generate_s1_config(self, task_config: Dict[str, Any], output_path: str) -> bool:
-        """生成GPT训练配置"""
+        """生成GPT训练配置，与generate_s1_config.py逻辑完全一致"""
         try:
-            s1_config = f"""
-exp_name: "{task_config['EXP_NAME']}"
-exp_dir: "{task_config['EXP_DIR']}"
-os_gpu: "{task_config['GPU_ID']}"
-if_dpo: false
-if_tts: false
-model_name: "s1bert25hz-2kh-longer-epoch=68e-step=50232"
-save_every_epoch: 5
-if_save_latest: true
-if_save_every_weights: true
-half_weights_save_dir: "{task_config['EXP_DIR']}"
-lr: 0.05
-decay_step: [4, 8, 12]
-decay: 0.5
-epoch: {task_config['EPOCHS_S1']}
-batch_size: {task_config['BATCH_SIZE']}
-dpo_lr: 0.00001
-version: "v2"
-pretrained_s1: "GPT_SoVITS/pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt"
-text_path: "{os.path.join(task_config['EXP_DIR'], '2-name2text.txt')}"
-semantic_path: "{os.path.join(task_config['EXP_DIR'], '6-name2semantic.tsv')}"
-bert_pretrained_dir: "{task_config['BERT_DIR']}"
-"""
+            import yaml
+            
+            # 按照webui.py的逻辑选择基础配置文件
+            version = task_config.get("VERSION", "v2ProPlus")
+            config_file = (
+                self.base_dir / "GPT_SoVITS/configs/s1longer.yaml" 
+                if version == "v1" 
+                else self.base_dir / "GPT_SoVITS/configs/s1longer-v2.yaml"
+            )
+            
+            # 加载基础配置文件，与webui.py完全一致
+            with open(config_file) as f:
+                data = yaml.load(f, Loader=yaml.FullLoader)
+            
+            # 设置实验目录路径
+            s1_dir = task_config["EXP_DIR"]
+            
+            # 按照webui.py的逻辑处理is_half
+            batch_size = task_config["BATCH_SIZE"]
+            is_half = task_config.get("IS_HALF", True)
+            if is_half == False:
+                data["train"]["precision"] = "32"
+                batch_size = max(1, batch_size // 2)
+            
+            # 设置训练参数（与generate_s1_config.py完全一致）
+            data["train"]["batch_size"] = batch_size
+            data["train"]["epochs"] = task_config["EPOCHS_S1"]
+            data["pretrained_s1"] = task_config.get("PRETRAINED_S1", "")
+            data["train"]["save_every_n_epoch"] = task_config.get("SAVE_EVERY_EPOCH_S1", 5)
+            data["train"]["if_save_every_weights"] = task_config.get("IF_SAVE_EVERY_WEIGHTS", True)
+            data["train"]["if_save_latest"] = task_config.get("IF_SAVE_LATEST", True)
+            data["train"]["if_dpo"] = task_config.get("IF_DPO", False)
+            data["train"]["exp_name"] = task_config["EXP_NAME"]
+            data["train_semantic_path"] = "%s/6-name2semantic.tsv" % s1_dir
+            data["train_phoneme_path"] = "%s/2-name2text.txt" % s1_dir
+            data["output_dir"] = "%s/logs_s1_%s" % (s1_dir, version)
             
             with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(s1_config)
+                yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
             
             logger.info(f"S1配置文件生成成功: {output_path}")
             return True

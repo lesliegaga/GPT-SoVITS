@@ -1,97 +1,298 @@
-# GPT-SoVITS 训练服务
+# GPT-SoVITS 训练服务（API + 管理）
 
-本目录包含了GPT-SoVITS训练服务的所有相关文件。
+将 `test_demo.sh` 的完整语音克隆训练流程封装为 RESTful API，支持分步骤执行、进度监控、文件管理与并行加速；提供启动脚本与客户端示例，便于快速集成与部署。
+
+## 功能概览
+
+- ✅ 分步骤训练：11 个独立步骤可单独调用与编排
+- ✅ 进度监控：实时任务状态、当前步骤与完成百分比
+- ✅ 并行处理：多 GPU 并行的特征提取加速
+- ✅ 文件管理：训练数据上传、结果文件下载
+- ✅ 错误处理：统一错误返回与任务失败状态
+- ✅ 任务管理：创建/查询/取消/删除任务，多任务并发
+- ✅ 部署便捷：脚本化启动，支持生产与 Docker
 
 ## 目录结构
 
 ```
 server/
-├── __init__.py                 # Python包初始化文件
-├── training_service.py         # 主要API服务，基于FastAPI
-├── training_steps.py           # 训练步骤处理器和配置生成器
-├── service_config.py           # 服务配置文件
-├── start_service.sh            # 服务启动脚本
-├── stop_service.sh             # 服务停止脚本
-├── SERVICE_SUMMARY.md          # 服务功能说明文档
-├── API_USAGE_GUIDE.md          # API使用指南
-└── api_tasks/                  # API任务工作目录
+├── __init__.py                 # Python 包初始化
+├── training_service.py         # FastAPI 主服务（API）
+├── training_steps.py           # 训练步骤处理与配置生成
+├── service_config.py           # 服务配置
+├── start_service.sh            # 启动脚本（开发/生产/守护）
+├── stop_service.sh             # 停止脚本
+└── api_tasks/                  # 任务工作目录（按 task_id 分隔）
 ```
 
 ## 快速开始
 
-### 1. 启动服务
+### 1) 安装依赖
+```bash
+pip install -r requirements.txt
+pip install fastapi uvicorn python-multipart
+# 安装 FFmpeg（用于音频转换）
+# macOS: brew install ffmpeg
+# Ubuntu: sudo apt install ffmpeg
+```
 
+### 2) 启动/停止服务
 ```bash
 cd server
+# 开发模式
 bash start_service.sh
+# 生产模式（多进程）
+bash start_service.sh -m production -w 4
+# 后台运行
+bash start_service.sh --daemon
+
+# 停止服务
+bash stop_service.sh            # 正常停止
+bash stop_service.sh -f         # 强制停止
+bash stop_service.sh --cleanup  # 停止并清理
 ```
 
-### 2. 停止服务
+### 3) 访问
+- 服务地址: `http://localhost:8000`
+- 文档: `http://localhost:8000/docs`
 
-```bash
-cd server
-bash stop_service.sh
-```
+## API 端点速览
 
-### 3. 从Python代码中使用
+| 方法 | 路径 | 功能 |
+|------|------|------|
+| POST | `/api/v1/task/create` | 创建训练任务 |
+| GET | `/api/v1/task/{task_id}` | 获取任务信息 |
+| GET | `/api/v1/tasks` | 列出所有任务 |
+| POST | `/api/v1/task/{task_id}/step/{step}` | 执行训练步骤 |
+| POST | `/api/v1/task/{task_id}/cancel` | 取消任务 |
+| DELETE | `/api/v1/task/{task_id}` | 删除任务 |
+| POST | `/api/v1/task/{task_id}/files/upload` | 上传文件 |
+| GET | `/api/v1/task/{task_id}/files/download/{filename}` | 下载文件 |
+| GET | `/api/v1/task/{task_id}/logs` | 获取任务日志 |
+
+## 使用示例（Python）
 
 ```python
-# 从根目录导入
+import requests
+import time
+
+BASE_URL = "http://localhost:8000/api/v1"
+
+class TrainingClient:
+    def __init__(self, base_url=BASE_URL):
+        self.base_url = base_url
+
+    def create_task(self, task_name, config):
+        return requests.post(f"{self.base_url}/task/create",
+                             json={"task_name": task_name, "config": config}).json()
+
+    def upload_audio(self, task_id, audio_file_path):
+        with open(audio_file_path, 'rb') as f:
+            return requests.post(f"{self.base_url}/task/{task_id}/files/upload",
+                                 files={'file': f}).json()
+
+    def execute_step(self, task_id, step_name, params=None):
+        return requests.post(f"{self.base_url}/task/{task_id}/step/{step_name}",
+                             json={"params": params or {}}).json()
+
+    def get_task_status(self, task_id):
+        return requests.get(f"{self.base_url}/task/{task_id}").json()
+
+    def wait_for_completion(self, task_id, timeout=3600):
+        start = time.time()
+        while time.time() - start < timeout:
+            s = self.get_task_status(task_id)
+            if s['status'] in ['completed', 'failed']:
+                return s
+            print(f"进度: {s['progress']:.1f}% - {s['current_step']}")
+            time.sleep(10)
+        raise TimeoutError('任务执行超时')
+
+def main():
+    client = TrainingClient()
+    task = client.create_task("语音克隆测试", {
+        "exp_name": "my_speaker",
+        "language": "zh",
+        "batch_size": 16,
+        "epochs_s2": 20,
+        "epochs_s1": 8,
+        "gpu_id": "0"
+    })
+    task_id = task['task_id']
+
+    for f in ["audio1.wav", "audio2.wav", "audio3.wav"]:
+        client.upload_audio(task_id, f)
+
+    for step in [
+        "convert_audio", "slice_audio", "denoise_audio", "asr_transcribe",
+        "extract_text_features", "extract_audio_features",
+        "extract_speaker_vectors", "extract_semantic_features",
+        "train_sovits", "train_gpt", "test_inference"
+    ]:
+        client.execute_step(task_id, step)
+        final_status = client.wait_for_completion(task_id)
+        if final_status['status'] == 'failed':
+            print("失败:", final_status.get('error_message'))
+            break
+
+if __name__ == "__main__":
+    main()
+```
+
+## 训练步骤与依赖
+
+流程概览：
+```
+convert_audio → slice_audio → denoise_audio → asr_transcribe
+                                                    ↓
+extract_text_features ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ← ←
+         ↓
+extract_audio_features
+         ↓
+extract_speaker_vectors
+         ↓
+extract_semantic_features
+         ↓
+train_sovits → train_gpt → test_inference
+```
+
+### 步骤参数示例
+- slice_audio
+```json
+{
+  "params": {
+    "min_length": -34,
+    "min_interval": 4000,
+    "hop_size": 300,
+    "max_sil_kept": 10,
+    "_max": 500,
+    "alpha": 0.9,
+    "n_parts": 0.25,
+    "is_speech": 0,
+    "num_processes": 1
+  }
+}
+```
+
+- denoise_audio / asr_transcribe
+```json
+{ "params": { "precision": "float16" } }
+```
+
+- test_inference
+```json
+{
+  "params": {
+    "gpt_model": "path/to/gpt_model.ckpt",
+    "sovits_model": "path/to/sovits_model.pth",
+    "ref_audio": "path/to/reference.wav",
+    "ref_text": "参考文本内容",
+    "ref_language": "中文",
+    "target_text": "目标合成文本",
+    "target_language": "中文"
+  }
+}
+```
+
+## 配置与运行模式
+
+- `service_config.py` 提供服务配置，支持环境变量覆盖
+- 默认主机与端口：`0.0.0.0:8000`
+- 工作目录：`server/api_tasks/`
+- 运行模式：
+  - 开发：单进程，热重载
+  - 生产：gunicorn + uvicorn 多进程
+
+导入方式：
+```python
 from server.training_service import app
 from server.service_config import print_config
 from server.training_steps import StepProcessor, ConfigGenerator
-
-# 或者直接进入server目录使用
-cd server
-python3 training_service.py
 ```
 
-## 配置说明
-
-- `service_config.py`: 包含所有服务配置，支持环境变量覆盖
-- 默认端口: 8000
-- 默认主机: 0.0.0.0
-- 工作目录: api_tasks/
-
-## 支持的模式
-
-- **开发模式**: 单进程，支持热重载
-- **生产模式**: 多进程，使用gunicorn + uvicorn
-
-## 依赖要求
-
-- Python 3.8+
-- FastAPI
-- uvicorn
-- gunicorn (生产模式)
-- 其他依赖见requirements.txt
-
-## 导入机制
-
-本服务支持两种导入模式：
-
-### 1. 包模式（推荐）
-从项目根目录导入，使用相对导入：
-```python
-from server.training_service import app
-from server.service_config import print_config
-from server.training_steps import StepProcessor, ConfigGenerator
-```
-
-### 2. 独立模式
-在server目录下直接运行，使用绝对导入：
+或在 `server` 目录下独立运行：
 ```bash
 cd server
 export GPT_SOVITS_SERVER_MODE=standalone
 python3 training_service.py
 ```
 
-启动脚本会自动设置正确的环境变量。
+## 部署
 
-## 注意事项
+### Gunicorn（生产环境）
+```bash
+pip install gunicorn
+gunicorn -w 4 -k uvicorn.workers.UvicornWorker \
+  --bind 0.0.0.0:8000 \
+  --timeout 7200 \
+  training_service:app
+```
 
-1. 所有文件现在都在server目录下，使用智能导入机制
-2. 启动脚本会自动检测环境依赖并设置正确的导入模式
-3. 支持后台运行和进程管理
-4. 包含完整的日志记录和错误处理
-5. 无需手动设置环境变量，启动脚本会自动处理
+### Docker
+```dockerfile
+FROM python:3.9
+WORKDIR /app
+COPY . /app
+RUN pip install fastapi uvicorn python-multipart
+RUN apt-get update && apt-get install -y ffmpeg
+EXPOSE 8000
+CMD ["python", "training_service.py"]
+```
+
+### 可选配置文件（示例）
+```yaml
+server:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+paths:
+  base_dir: "/path/to/GPT-SoVITS"
+  work_dir: "/path/to/workdir"
+gpu:
+  default_device: "0"
+  max_parallel: 4
+training:
+  default_epochs_s2: 50
+  default_epochs_s1: 15
+  default_batch_size: 16
+```
+
+## 监控、日志与故障排除
+
+### 查看日志与监控
+```bash
+tail -f logs/service.log
+curl http://localhost:8000/api/v1/task/{task_id}/logs
+curl http://localhost:8000/api/v1/task/{task_id}
+curl http://localhost:8000/api/v1/tasks
+```
+
+### 常见问题
+- FFmpeg 未安装：安装系统级 FFmpeg
+- GPU 内存不足：减小 batch_size、关闭其他 GPU 程序、使用梯度累积
+- 依赖缺失：`pip install -r requirements.txt` 并补充 `fastapi uvicorn python-multipart`
+- 权限问题：`chmod +x *.py && chmod 755 /path/to/workdir`
+
+### 调试模式
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+uvicorn.run(app, host="0.0.0.0", port=8000, log_level="debug")
+```
+
+## 性能与安全
+
+- 多 GPU：示例 `{ "gpu_id": "0-1-2" }`
+- 批次大小：按显存调整（如 24GB 可设 32）
+- 并行：特征提取步骤支持多 GPU 并行，异步任务执行
+- 安全：限制与校验上传文件、任务隔离与权限控制、错误信息过滤、资源使用监控
+
+## 规划（可选）
+- 实时训练进度 WebSocket 推送
+- 分布式训练与模型版本管理
+- 结果可视化与监控面板
+- Redis 缓存、数据库持久化、负载均衡与容器化
+
+## 支持
+- 文档: `http://localhost:8000/docs`
+- 示例: 参见仓库 `client_example.py`
