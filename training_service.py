@@ -54,7 +54,7 @@ class TaskConfig(BaseModel):
     batch_size: int = Field(default=16, description="批次大小")
     epochs_s2: int = Field(default=50, description="SoVITS训练轮数")
     epochs_s1: int = Field(default=15, description="GPT训练轮数")
-    gpu_id: str = Field(default="0", description="GPU设备ID")
+    gpu_id: str = Field(default=os.environ.get("CUDA_VISIBLE_DEVICES", "0"), description="GPU设备ID")
 
 class TaskCreateRequest(BaseModel):
     task_name: str = Field(description="任务名称")
