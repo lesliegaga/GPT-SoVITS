@@ -6,11 +6,11 @@
 set -e
 
 # 默认配置
-HOST="0.0.0.0"
-PORT="8000"
-WORKERS="1"
+HOST="${SERVICE_HOST:-0.0.0.0}"
+PORT="${SERVICE_PORT:-8000}"
+WORKERS="${SERVICE_WORKERS:-1}"
 MODE="development"
-LOG_LEVEL="info"
+LOG_LEVEL="${SERVICE_LOG_LEVEL:-info}"
 RELOAD="false"
 
 # 函数定义

@@ -21,8 +21,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
-# 导入步骤处理器
+# 导入步骤处理器和配置
 from training_steps import StepProcessor, ConfigGenerator
+from service_config import get_base_path, get_work_dir, get_model_paths
 
 # 任务状态枚举
 class TaskStatus(str, Enum):
@@ -88,11 +89,16 @@ class TrainingService:
     """训练服务核心类"""
     
     def __init__(self):
-        self.base_dir = Path("~/workspace/git/GPT-SoVITS")
-        self.work_dir = self.base_dir / "api_tasks"
-        self.work_dir.mkdir(exist_ok=True)
+        # 使用配置文件获取路径
+        self.base_dir = get_base_path()
+        self.work_dir = get_work_dir()
+        
         self.step_processor = StepProcessor(str(self.base_dir))
         self.config_generator = ConfigGenerator(str(self.base_dir))
+        
+        print(f"✅ 初始化完成:")
+        print(f"   基础目录: {self.base_dir}")
+        print(f"   工作目录: {self.work_dir}")
     
     def get_task_dir(self, task_id: str) -> Path:
         """获取任务工作目录"""
@@ -117,6 +123,9 @@ class TrainingService:
         task_dir = self.get_task_dir(task_id)
         config_file = task_dir / "task_config.json"
         
+        # 获取模型路径配置
+        model_paths = get_model_paths()
+        
         # 基于原始脚本的配置结构
         task_config = {
             "INPUT_AUDIO": str(self.get_task_input_dir(task_id)),
@@ -126,9 +135,9 @@ class TrainingService:
             "SLICED_DIR": str(task_dir / "sliced"),
             "DENOISED_DIR": str(task_dir / "denoised"), 
             "ASR_OUTPUT": str(task_dir / "transcripts"),
-            "BERT_DIR": str(self.base_dir / "GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"),
-            "CNHUBERT_DIR": str(self.base_dir / "GPT_SoVITS/pretrained_models/chinese-hubert-base"),
-            "PRETRAINED_SV": str(self.base_dir / "GPT_SoVITS/pretrained_models/sv/pretrained_eres2netv2w24s4ep4.ckpt"),
+            "BERT_DIR": model_paths["bert_dir"],
+            "CNHUBERT_DIR": model_paths["cnhubert_dir"],
+            "PRETRAINED_SV": model_paths["pretrained_sv"],
             "BATCH_SIZE": config.batch_size,
             "EPOCHS_S2": config.epochs_s2,
             "EPOCHS_S1": config.epochs_s1,
@@ -515,6 +524,7 @@ def parse_arguments():
   python training_service.py --port 8216       # 指定端口8216
   python training_service.py -p 9000           # 使用短参数指定端口
   python training_service.py --host 127.0.0.1  # 指定主机地址
+  python training_service.py --config          # 显示当前配置
   python training_service.py --help            # 显示帮助信息
         """
     )
@@ -522,30 +532,30 @@ def parse_arguments():
     parser.add_argument(
         "-p", "--port",
         type=int,
-        default=8000,
-        help="服务端口号 (默认: 8000)"
+        default=None,
+        help="服务端口号 (默认: 从配置文件读取)"
     )
     
     parser.add_argument(
         "-H", "--host",
         type=str,
-        default="0.0.0.0",
-        help="绑定主机地址 (默认: 0.0.0.0)"
+        default=None,
+        help="绑定主机地址 (默认: 从配置文件读取)"
     )
     
     parser.add_argument(
         "--workers",
         type=int,
-        default=1,
-        help="工作进程数 (默认: 1)"
+        default=None,
+        help="工作进程数 (默认: 从配置文件读取)"
     )
     
     parser.add_argument(
         "--log-level",
         type=str,
-        default="info",
+        default=None,
         choices=["debug", "info", "warning", "error"],
-        help="日志级别 (默认: info)"
+        help="日志级别 (默认: 从配置文件读取)"
     )
     
     parser.add_argument(
@@ -554,24 +564,45 @@ def parse_arguments():
         help="开发模式：代码变更时自动重载"
     )
     
+    parser.add_argument(
+        "--config",
+        action="store_true",
+        help="显示当前配置信息"
+    )
+    
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_arguments()
     
+    # 如果只是显示配置，则显示后退出
+    if args.config:
+        from service_config import print_config
+        print_config()
+        exit(0)
+    
+    # 导入配置
+    from service_config import SERVICE_CONFIG
+    
+    # 使用命令行参数覆盖配置文件，如果没有指定则使用配置文件的值
+    host = args.host or SERVICE_CONFIG["host"]
+    port = args.port or SERVICE_CONFIG["port"]
+    workers = args.workers or SERVICE_CONFIG["workers"]
+    log_level = args.log_level or SERVICE_CONFIG["log_level"]
+    
     print(f"🚀 启动 GPT-SoVITS 训练服务API")
-    print(f"📍 服务地址: http://{args.host}:{args.port}")
-    print(f"📚 API文档: http://{args.host}:{args.port}/docs")
-    print(f"🔧 工作进程: {args.workers}")
-    print(f"📝 日志级别: {args.log_level}")
+    print(f"📍 服务地址: http://{host}:{port}")
+    print(f"📚 API文档: http://{host}:{port}/docs")
+    print(f"🔧 工作进程: {workers}")
+    print(f"📝 日志级别: {log_level}")
     print(f"🔄 自动重载: {'开启' if args.reload else '关闭'}")
     print("=" * 50)
     
     uvicorn.run(
         app, 
-        host=args.host, 
-        port=args.port,
-        workers=args.workers,
-        log_level=args.log_level,
+        host=host, 
+        port=port,
+        workers=workers,
+        log_level=log_level,
         reload=args.reload
     )
