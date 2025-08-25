@@ -11,6 +11,7 @@ import uuid
 import asyncio
 import subprocess
 import argparse
+import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from pathlib import Path
@@ -24,6 +25,17 @@ import uvicorn
 # 导入步骤处理器和配置
 from training_steps import StepProcessor, ConfigGenerator
 from service_config import get_base_path, get_work_dir, get_model_paths
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('training_service.log', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # 任务状态枚举
 class TaskStatus(str, Enum):
@@ -96,9 +108,9 @@ class TrainingService:
         self.step_processor = StepProcessor(str(self.base_dir))
         self.config_generator = ConfigGenerator(str(self.base_dir))
         
-        print(f"✅ 初始化完成:")
-        print(f"   基础目录: {self.base_dir}")
-        print(f"   工作目录: {self.work_dir}")
+        logger.info(f"✅ 初始化完成:")
+        logger.info(f"   基础目录: {self.base_dir}")
+        logger.info(f"   工作目录: {self.work_dir}")
     
     def get_task_dir(self, task_id: str) -> Path:
         """获取任务工作目录"""
@@ -215,12 +227,12 @@ class TrainingService:
                 try:
                     asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
                     if asr_output != config["ASR_OUTPUT"]:
-                        print(f"✅ 找到ASR输出文件: {asr_output}")
+                        logger.info(f"✅ 找到ASR输出文件: {asr_output}")
                         # 更新配置
                         config["ASR_OUTPUT"] = asr_output
                         self._save_task_config(task_id, config)
                 except FileNotFoundError as e:
-                    print(f"❌ ASR输出文件查找失败: {e}")
+                    logger.error(f"❌ ASR输出文件查找失败: {e}")
                     task_info.status = TaskStatus.FAILED
                     task_info.error_message = str(e)
                     return
@@ -245,12 +257,12 @@ class TrainingService:
                 try:
                     asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
                     if asr_output != config["ASR_OUTPUT"]:
-                        print(f"✅ 找到ASR输出文件: {asr_output}")
+                        logger.info(f"✅ 找到ASR输出文件: {asr_output}")
                         # 更新配置
                         config["ASR_OUTPUT"] = asr_output
                         self._save_task_config(task_id, config)
                 except FileNotFoundError as e:
-                    print(f"❌ ASR输出文件查找失败: {e}")
+                    logger.error(f"❌ ASR输出文件查找失败: {e}")
                     task_info.status = TaskStatus.FAILED
                     task_info.error_message = str(e)
                     return
@@ -268,12 +280,12 @@ class TrainingService:
                 try:
                     asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
                     if asr_output != config["ASR_OUTPUT"]:
-                        print(f"✅ 找到ASR输出文件: {asr_output}")
+                        logger.info(f"✅ 找到ASR输出文件: {asr_output}")
                         # 更新配置
                         config["ASR_OUTPUT"] = asr_output
                         self._save_task_config(task_id, config)
                 except FileNotFoundError as e:
-                    print(f"❌ ASR输出文件查找失败: {e}")
+                    logger.error(f"❌ ASR输出文件查找失败: {e}")
                     task_info.status = TaskStatus.FAILED
                     task_info.error_message = str(e)
                     return
@@ -291,12 +303,12 @@ class TrainingService:
                 try:
                     asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
                     if asr_output != config["ASR_OUTPUT"]:
-                        print(f"✅ 找到ASR输出文件: {asr_output}")
+                        logger.info(f"✅ 找到ASR输出文件: {asr_output}")
                         # 更新配置
                         config["ASR_OUTPUT"] = asr_output
                         self._save_task_config(task_id, config)
                 except FileNotFoundError as e:
-                    print(f"❌ ASR输出文件查找失败: {e}")
+                    logger.error(f"❌ ASR输出文件查找失败: {e}")
                     task_info.status = TaskStatus.FAILED
                     task_info.error_message = str(e)
                     return
@@ -682,13 +694,13 @@ if __name__ == "__main__":
     workers = args.workers or SERVICE_CONFIG["workers"]
     log_level = args.log_level or SERVICE_CONFIG["log_level"]
     
-    print(f"🚀 启动 GPT-SoVITS 训练服务API")
-    print(f"📍 服务地址: http://{host}:{port}")
-    print(f"📚 API文档: http://{host}:{port}/docs")
-    print(f"🔧 工作进程: {workers}")
-    print(f"📝 日志级别: {log_level}")
-    print(f"🔄 自动重载: {'开启' if args.reload else '关闭'}")
-    print("=" * 50)
+    logger.info(f"🚀 启动 GPT-SoVITS 训练服务API")
+    logger.info(f"📍 服务地址: http://{host}:{port}")
+    logger.info(f"📚 API文档: http://{host}:{port}/docs")
+    logger.info(f"🔧 工作进程: {workers}")
+    logger.info(f"📝 日志级别: {log_level}")
+    logger.info(f"🔄 自动重载: {'开启' if args.reload else '关闭'}")
+    logger.info("=" * 50)
     
     uvicorn.run(
         app, 
