@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional
 class GPTSoVITSClient:
     """GPT-SoVITS训练服务客户端"""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8216"):
         self.base_url = base_url.rstrip('/')
         self.api_base = f"{self.base_url}/api/v1"
         
