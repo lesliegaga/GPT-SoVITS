@@ -211,6 +211,20 @@ class TrainingService:
                 )
                 
             elif step == TrainingStep.EXTRACT_TEXT_FEATURES:
+                # 修复：确保ASR输出指向具体的文件而不是目录
+                try:
+                    asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
+                    if asr_output != config["ASR_OUTPUT"]:
+                        print(f"✅ 找到ASR输出文件: {asr_output}")
+                        # 更新配置
+                        config["ASR_OUTPUT"] = asr_output
+                        self._save_task_config(task_id, config)
+                except FileNotFoundError as e:
+                    print(f"❌ ASR输出文件查找失败: {e}")
+                    task_info.status = TaskStatus.FAILED
+                    task_info.error_message = str(e)
+                    return
+                
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
@@ -227,6 +241,20 @@ class TrainingService:
                     )
                     
             elif step == TrainingStep.EXTRACT_AUDIO_FEATURES:
+                # 修复：确保ASR输出指向具体的文件而不是目录
+                try:
+                    asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
+                    if asr_output != config["ASR_OUTPUT"]:
+                        print(f"✅ 找到ASR输出文件: {asr_output}")
+                        # 更新配置
+                        config["ASR_OUTPUT"] = asr_output
+                        self._save_task_config(task_id, config)
+                except FileNotFoundError as e:
+                    print(f"❌ ASR输出文件查找失败: {e}")
+                    task_info.status = TaskStatus.FAILED
+                    task_info.error_message = str(e)
+                    return
+                
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
@@ -236,6 +264,20 @@ class TrainingService:
                 )
                 
             elif step == TrainingStep.EXTRACT_SPEAKER_VECTORS:
+                # 修复：确保ASR输出指向具体的文件而不是目录
+                try:
+                    asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
+                    if asr_output != config["ASR_OUTPUT"]:
+                        print(f"✅ 找到ASR输出文件: {asr_output}")
+                        # 更新配置
+                        config["ASR_OUTPUT"] = asr_output
+                        self._save_task_config(task_id, config)
+                except FileNotFoundError as e:
+                    print(f"❌ ASR输出文件查找失败: {e}")
+                    task_info.status = TaskStatus.FAILED
+                    task_info.error_message = str(e)
+                    return
+                
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
@@ -245,6 +287,20 @@ class TrainingService:
                 )
                 
             elif step == TrainingStep.EXTRACT_SEMANTIC_FEATURES:
+                # 修复：确保ASR输出指向具体的文件而不是目录
+                try:
+                    asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
+                    if asr_output != config["ASR_OUTPUT"]:
+                        print(f"✅ 找到ASR输出文件: {asr_output}")
+                        # 更新配置
+                        config["ASR_OUTPUT"] = asr_output
+                        self._save_task_config(task_id, config)
+                except FileNotFoundError as e:
+                    print(f"❌ ASR输出文件查找失败: {e}")
+                    task_info.status = TaskStatus.FAILED
+                    task_info.error_message = str(e)
+                    return
+                
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
@@ -312,6 +368,42 @@ class TrainingService:
         config_file = self.get_task_dir(task_id) / "task_config.json"
         with open(config_file, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
+    
+    def _find_asr_output_file(self, asr_output_path: str) -> str:
+        """智能查找ASR输出文件"""
+        asr_path = Path(asr_output_path)
+        
+        if asr_path.is_file():
+            # 如果已经是文件，直接返回
+            return str(asr_path)
+        
+        if asr_path.is_dir():
+            # 如果是目录，按优先级查找文件
+            # 优先级1: .list文件（标准格式）
+            list_files = list(asr_path.glob("*.list"))
+            if list_files:
+                return str(list_files[0])
+            
+            # 优先级2: .txt文件
+            txt_files = list(asr_path.glob("*.txt"))
+            if txt_files:
+                return str(txt_files[0])
+            
+            # 优先级3: .tsv文件
+            tsv_files = list(asr_path.glob("*.tsv"))
+            if tsv_files:
+                return str(tsv_files[0])
+            
+            # 优先级4: 任何其他文件
+            other_files = list(asr_path.glob("*"))
+            if other_files:
+                return str(other_files[0])
+            
+            # 如果都找不到，抛出错误
+            raise FileNotFoundError(f"在ASR输出目录中找不到转录文件: {asr_output_path}")
+        
+        # 如果路径不存在，抛出错误
+        raise FileNotFoundError(f"ASR输出路径不存在: {asr_output_path}")
     
 
     def _build_step_env(self, config: Dict[str, Any]) -> Dict[str, str]:
