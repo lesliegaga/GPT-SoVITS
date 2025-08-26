@@ -194,6 +194,11 @@ class TrainingService:
         task_info.current_step = step
         task_info.updated_at = datetime.now()
         
+        # 设置当前步骤的起始进度
+        step_start_progress = self.get_step_progress(task_id, step)
+        task_info.progress = step_start_progress
+        logger.info(f"步骤 {step.value} 开始执行，起始进度: {step_start_progress:.1f}%")
+        
         try:
             config = self.load_task_config(task_id)
             success = False
@@ -374,9 +379,11 @@ class TrainingService:
             if success:
                 task_info.status = TaskStatus.COMPLETED
                 self._update_progress(task_id, step)
+                logger.info(f"步骤 {step.value} 执行成功，任务 {task_id} 进度更新完成")
             else:
                 task_info.status = TaskStatus.FAILED
                 task_info.error_message = f"步骤 {step} 执行失败"
+                logger.error(f"步骤 {step.value} 执行失败，任务 {task_id} 状态更新为失败")
                 
         except Exception as e:
             task_info.status = TaskStatus.FAILED
@@ -452,26 +459,99 @@ class TrainingService:
         if task_id not in tasks_db:
             return
         
-        # 定义步骤权重
+        # 定义步骤顺序和权重（按实际执行顺序）
+        step_sequence = [
+            TrainingStep.CONVERT_AUDIO,
+            TrainingStep.SLICE_AUDIO,
+            TrainingStep.DENOISE_AUDIO,
+            TrainingStep.ASR_TRANSCRIBE,
+            TrainingStep.EXTRACT_TEXT_FEATURES,
+            TrainingStep.EXTRACT_AUDIO_FEATURES,
+            TrainingStep.EXTRACT_SPEAKER_VECTORS,
+            TrainingStep.EXTRACT_SEMANTIC_FEATURES,
+            TrainingStep.TRAIN_SOVITS,
+            TrainingStep.TRAIN_GPT,
+            TrainingStep.TEST_INFERENCE
+        ]
+        
+        # 定义步骤权重（基于实际复杂度和时间）
         step_weights = {
-            TrainingStep.CONVERT_AUDIO: 5,
-            TrainingStep.SLICE_AUDIO: 10,
-            TrainingStep.DENOISE_AUDIO: 10,
-            TrainingStep.ASR_TRANSCRIBE: 15,
-            TrainingStep.EXTRACT_TEXT_FEATURES: 10,
-            TrainingStep.EXTRACT_AUDIO_FEATURES: 10,
-            TrainingStep.EXTRACT_SPEAKER_VECTORS: 10,
-            TrainingStep.EXTRACT_SEMANTIC_FEATURES: 10,
-            TrainingStep.TRAIN_SOVITS: 15,
-            TrainingStep.TRAIN_GPT: 15,
-            TrainingStep.TEST_INFERENCE: 5
+            TrainingStep.CONVERT_AUDIO: 3,        # 音频转换，相对简单
+            TrainingStep.SLICE_AUDIO: 5,          # 音频切片，中等复杂度
+            TrainingStep.DENOISE_AUDIO: 8,        # 音频降噪，较复杂
+            TrainingStep.ASR_TRANSCRIBE: 10,      # 语音识别，复杂
+            TrainingStep.EXTRACT_TEXT_FEATURES: 8, # 文本特征提取，中等复杂度
+            TrainingStep.EXTRACT_AUDIO_FEATURES: 12, # 音频特征提取，复杂
+            TrainingStep.EXTRACT_SPEAKER_VECTORS: 8, # 说话人向量提取，中等复杂度
+            TrainingStep.EXTRACT_SEMANTIC_FEATURES: 10, # 语义特征提取，复杂
+            TrainingStep.TRAIN_SOVITS: 20,        # SoVITS训练，最复杂
+            TrainingStep.TRAIN_GPT: 20,           # GPT训练，最复杂
+            TrainingStep.TEST_INFERENCE: 6        # 推理测试，中等复杂度
         }
         
+        # 计算已完成步骤的权重
         total_weight = sum(step_weights.values())
-        completed_weight = sum(weight for step, weight in step_weights.items() 
-                             if step.value <= completed_step.value)
+        completed_weight = 0
         
-        tasks_db[task_id].progress = (completed_weight / total_weight) * 100
+        for step in step_sequence:
+            if step == completed_step:
+                # 当前步骤完成，加上其权重
+                completed_weight += step_weights[step]
+                break
+            else:
+                # 之前步骤已完成，加上其权重
+                completed_weight += step_weights[step]
+        
+        # 更新进度
+        progress = min(100.0, (completed_weight / total_weight) * 100)
+        tasks_db[task_id].progress = progress
+        
+        logger.info(f"任务 {task_id} 进度更新: {completed_step.value} 完成，总进度: {progress:.1f}%")
+    
+    def get_step_progress(self, task_id: str, current_step: TrainingStep) -> float:
+        """获取当前步骤的进度百分比"""
+        # 定义步骤顺序和权重（与_update_progress保持一致）
+        step_sequence = [
+            TrainingStep.CONVERT_AUDIO,
+            TrainingStep.SLICE_AUDIO,
+            TrainingStep.DENOISE_AUDIO,
+            TrainingStep.ASR_TRANSCRIBE,
+            TrainingStep.EXTRACT_TEXT_FEATURES,
+            TrainingStep.EXTRACT_AUDIO_FEATURES,
+            TrainingStep.EXTRACT_SPEAKER_VECTORS,
+            TrainingStep.EXTRACT_SEMANTIC_FEATURES,
+            TrainingStep.TRAIN_SOVITS,
+            TrainingStep.TRAIN_GPT,
+            TrainingStep.TEST_INFERENCE
+        ]
+        
+        step_weights = {
+            TrainingStep.CONVERT_AUDIO: 3,
+            TrainingStep.SLICE_AUDIO: 5,
+            TrainingStep.DENOISE_AUDIO: 8,
+            TrainingStep.ASR_TRANSCRIBE: 10,
+            TrainingStep.EXTRACT_TEXT_FEATURES: 8,
+            TrainingStep.EXTRACT_AUDIO_FEATURES: 12,
+            TrainingStep.EXTRACT_SPEAKER_VECTORS: 8,
+            TrainingStep.EXTRACT_SEMANTIC_FEATURES: 10,
+            TrainingStep.TRAIN_SOVITS: 20,
+            TrainingStep.TRAIN_GPT: 20,
+            TrainingStep.TEST_INFERENCE: 6
+        }
+        
+        # 计算当前步骤之前的累计权重
+        total_weight = sum(step_weights.values())
+        completed_weight = 0
+        
+        for step in step_sequence:
+            if step == current_step:
+                # 到达当前步骤，返回之前的累计进度
+                break
+            else:
+                completed_weight += step_weights[step]
+        
+        # 返回当前步骤之前的累计进度
+        return (completed_weight / total_weight) * 100
 
 # 初始化服务
 training_service = TrainingService()
