@@ -91,7 +91,7 @@ def check_and_fix_nltk_cmudict():
         
         # 重新下载CMU词典
         logger.info("📥 重新下载NLTK CMU词典...")
-        nltk.download('cmudict', force=True, quiet=True)
+        nltk.download('cmudict', force=True)
         
         # 再次测试
         try:
