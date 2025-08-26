@@ -363,13 +363,147 @@ class TrainingService:
                 
             elif step == TrainingStep.TEST_INFERENCE:
                 inference_params = params or {}
+                
+                # 自动构建推理测试所需的参数
+                # 1. 查找训练好的模型文件（参考get_trained_models.py的逻辑）
+                import sys
+                
+                # 添加项目根路径到Python路径，以便导入config模块
+                if str(self.base_dir) not in sys.path:
+                    sys.path.insert(0, str(self.base_dir))
+                
+                try:
+                    from config import GPT_weight_version2root, SoVITS_weight_version2root
+                except ImportError:
+                    # 如果无法导入，使用默认值
+                    logger.warning("无法导入config模块，使用默认配置")
+                    GPT_weight_version2root = {
+                        "v1": "GPT_weights/",
+                        "v2": "GPT_weights_v2/",
+                        "v2Pro": "GPT_weights_v2Pro/",
+                        "v2ProPlus": "GPT_weights_v2ProPlus/"
+                    }
+                    SoVITS_weight_version2root = {
+                        "v1": "SoVITS_weights/",
+                        "v2": "SoVITS_weights_v2/",
+                        "v2Pro": "SoVITS_weights_v2Pro/",
+                        "v2ProPlus": "SoVITS_weights_v2ProPlus/"
+                    }
+                
+                # 获取版本信息
+                version = config.get("VERSION", "v2ProPlus")
+                
+                # 获取版本对应的权重目录
+                gpt_weight_dir = GPT_weight_version2root.get(version, "")
+                sovits_weight_dir = SoVITS_weight_version2root.get(version, "")
+                
+                if not gpt_weight_dir:
+                    raise FileNotFoundError(f"找不到版本 {version} 对应的GPT权重目录")
+                if not sovits_weight_dir:
+                    raise FileNotFoundError(f"找不到版本 {version} 对应的SoVITS权重目录")
+                
+                # 构建完整的权重目录路径
+                gpt_weights_dir = self.base_dir / gpt_weight_dir
+                sovits_weights_dir = self.base_dir / sovits_weight_dir
+                
+                # 查找GPT模型（.ckpt文件）
+                gpt_model = ""
+                if gpt_weights_dir.exists():
+                    gpt_files = list(gpt_weights_dir.glob("*.ckpt"))
+                    if gpt_files:
+                        # 选择最新的GPT模型（按修改时间排序）
+                        gpt_model = str(sorted(gpt_files, key=lambda x: x.stat().st_mtime)[-1])
+                
+                # 查找SoVITS模型（.pth文件）
+                sovits_model = ""
+                if sovits_weights_dir.exists():
+                    sovits_files = list(sovits_weights_dir.glob("*.pth"))
+                    if sovits_files:
+                        # 选择最新的SoVITS模型（按修改时间排序）
+                        sovits_model = str(sorted(sovits_files, key=lambda x: x.stat().st_mtime)[-1])
+                
+                if not gpt_model:
+                    raise FileNotFoundError(f"找不到训练好的GPT模型文件，请检查目录: {gpt_weights_dir}")
+                if not sovits_model:
+                    raise FileNotFoundError(f"找不到训练好的SoVITS模型文件，请检查目录: {sovits_weights_dir}")
+                
+                logger.info(f"找到模型文件: GPT={gpt_model}, SoVITS={sovits_model}")
+                
+                # 2. 查找参考音频和文本
+                ref_audio = ""
+                ref_text = ""
+                
+                # 从降噪后的音频中选择一个作为参考
+                denoised_dir = Path(config["DENOISED_DIR"])
+                if denoised_dir.exists():
+                    wav_files = list(denoised_dir.glob("*.wav"))
+                    if wav_files:
+                        ref_audio = str(wav_files[0])
+                
+                # 从ASR输出中提取对应的文本
+                asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
+                if asr_output and Path(asr_output).exists():
+                    # 根据参考音频文件名查找对应的文本
+                    ref_audio_name = Path(ref_audio).stem
+                    try:
+                        with open(asr_output, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                if ref_audio_name in line:
+                                    # 解析不同格式的ASR输出
+                                    if '|' in line:
+                                        # .list格式: file_path|output_file_name|language|text
+                                        parts = line.strip().split('|')
+                                        if len(parts) >= 4:
+                                            ref_text = parts[3]
+                                            break
+                                    elif '\t' in line:
+                                        # .tsv格式: file_name\ttranscript
+                                        parts = line.strip().split('\t')
+                                        if len(parts) >= 2:
+                                            ref_text = parts[1]
+                                            break
+                                    else:
+                                        # 其他格式，使用整行
+                                        ref_text = line.strip()
+                                        break
+                    except Exception as e:
+                        logger.warning(f"读取ASR输出文件失败: {e}")
+                
+                if not ref_text:
+                    # 如果无法从ASR输出提取，使用默认文本
+                    ref_text = "这是一个参考音频的文本内容。"
+                
+                # 3. 创建目标文本文件
+                target_text = inference_params.get("target_text", "这是一个测试文本，用于验证训练好的模型效果。")
+                target_text_file = Path(config["WORK_DIR"]) / "target_text.txt"
+                target_text_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(target_text_file, 'w', encoding='utf-8') as f:
+                    f.write(target_text)
+                
+                # 4. 创建参考文本文件
+                ref_text_file = Path(config["WORK_DIR"]) / "ref_text.txt"
+                with open(ref_text_file, 'w', encoding='utf-8') as f:
+                    f.write(ref_text)
+                
+                # 5. 构建完整的推理参数
                 inference_params.update({
+                    "gpt_model": gpt_model,
+                    "sovits_model": sovits_model,
+                    "ref_audio": ref_audio,
+                    "ref_text": str(ref_text_file),
+                    "target_text": str(target_text_file),
                     "output_path": config["WORK_DIR"] + "/output",
                     "bert_path": config["BERT_DIR"],
                     "cnhubert_base_path": config["CNHUBERT_DIR"],
                     "gpu_number": config["GPU_ID"],
-                    "is_half": True
+                    "is_half": True,
+                    "ref_language": "中文",
+                    "target_language": "中文"
                 })
+                
+                logger.info(f"推理测试参数: GPT={gpt_model}, SoVITS={sovits_model}")
+                logger.info(f"参考音频: {ref_audio}, 参考文本: {ref_text}")
+                logger.info(f"目标文本: {target_text}")
                 
                 success = await self.step_processor.test_inference(**inference_params)
                 
