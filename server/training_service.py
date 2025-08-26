@@ -603,6 +603,8 @@ class CharacterBasedTrainingService:
             
             # 查找生成的模型文件
             self._find_trained_models(character_name)
+            # 同步模型到角色目录
+            self._sync_character_models_dir(character_name)
             
             characters_db[character_name].training_status = ProcessingStatus.COMPLETED
             characters_db[character_name].model_exists = True
@@ -780,6 +782,8 @@ class CharacterBasedTrainingService:
                         # 自动检查模型状态
                         if self._check_models_exist(character_name):
                             logger.info(f"✅ 角色 {character_name} 已训练完成")
+                            # 将模型同步到角色目录
+                            self._sync_character_models_dir(character_name)
                         else:
                             logger.info(f"⚠️  角色 {character_name} 尚未训练完成")
                         
@@ -890,6 +894,8 @@ class CharacterBasedTrainingService:
                             logger.info(f"✅ 发现已训练的模型: {character_name}")
                             logger.info(f"   GPT模型: {latest_gpt}")
                             logger.info(f"   SoVITS模型: {latest_sovits}")
+                            # 同步模型到角色目录
+                            self._sync_character_models_dir(character_name)
                             return True
             
             return False
@@ -897,6 +903,45 @@ class CharacterBasedTrainingService:
         except Exception as e:
             logger.warning(f"查找模型文件失败 {character_name}: {e}")
             return False
+    
+    def _sync_character_models_dir(self, character_name: str):
+        """将已发现/训练完成的模型同步到角色的 models 目录（使用符号链接，若不支持则复制）"""
+        if character_name not in training_db:
+            return
+        training_info = training_db[character_name]
+        if not training_info.gpt_model_path or not training_info.sovits_model_path:
+            return
+        gpt_src = Path(training_info.gpt_model_path)
+        sovits_src = Path(training_info.sovits_model_path)
+        if not gpt_src.exists() or not sovits_src.exists():
+            return
+        models_dir = self.get_character_models_dir(character_name)
+        models_dir.mkdir(parents=True, exist_ok=True)
+        gpt_dst = models_dir / gpt_src.name
+        sovits_dst = models_dir / sovits_src.name
+        
+        # 建立链接或复制
+        for src, dst in [(gpt_src, gpt_dst), (sovits_src, sovits_dst)]:
+            try:
+                if dst.exists():
+                    # 已存在则跳过
+                    continue
+                # 优先创建符号链接
+                dst.symlink_to(src)
+            except Exception:
+                # 回退为复制
+                try:
+                    shutil.copy2(src, dst)
+                except Exception as copy_err:
+                    logger.warning(f"同步模型到角色目录失败 {character_name}: {copy_err}")
+        
+        # 同步完成后，更新training_db中的模型路径为角色目录下的路径
+        if gpt_dst.exists() and sovits_dst.exists():
+            training_info.gpt_model_path = str(gpt_dst)
+            training_info.sovits_model_path = str(sovits_dst)
+            logger.info(f"✅ 模型路径已更新为角色目录: {character_name}")
+            logger.info(f"   GPT模型: {gpt_dst}")
+            logger.info(f"   SoVITS模型: {sovits_dst}")
     
     def _build_training_config(self, character_name: str) -> Dict[str, Any]:
         """构建训练配置"""
@@ -1065,7 +1110,7 @@ class CharacterBasedTrainingService:
             "output_path": output_path,
             "bert_path": model_paths["bert_dir"],
             "cnhubert_base_path": model_paths["cnhubert_dir"],
-            "gpu_number": config.gpu_id,
+            "gpu_number": gpu_number,
             "is_half": True
         }
     

@@ -316,11 +316,15 @@ class StepProcessor:
             if kwargs.get('is_half', False):
                 cmd.append('--is_half')
             
+            # 确保子进程继承父进程的环境变量，特别是CUDA_VISIBLE_DEVICES
+            env = os.environ.copy()
+            
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(self.base_dir),
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=env
             )
             
             stdout, stderr = await process.communicate()
