@@ -773,6 +773,16 @@ class CharacterBasedTrainingService:
                             config_data = json.load(f)
                         
                         character_info = CharacterInfo(**config_data)
+                        
+                        # 动态更新GPU配置：如果当前环境与配置文件不一致，更新配置
+                        current_gpu_env = os.environ.get("CUDA_VISIBLE_DEVICES")
+                        if current_gpu_env and character_info.config.gpu_id != current_gpu_env:
+                            old_gpu_id = character_info.config.gpu_id
+                            character_info.config.gpu_id = current_gpu_env
+                            logger.info(f"角色 {character_name} GPU配置已更新: {old_gpu_id} -> {current_gpu_env}")
+                            # 保存更新后的配置
+                            self._save_character_config(character_name, character_info)
+                        
                         characters_db[character_name] = character_info
                         
                         # 更新音频数量和状态
