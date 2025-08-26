@@ -1099,6 +1099,12 @@ class CharacterBasedTrainingService:
         # 获取模型路径配置
         model_paths = get_model_paths()
         
+        # 动态获取GPU设置：优先使用当前环境的CUDA_VISIBLE_DEVICES，确保与服务启动环境一致
+        current_gpu_env = os.environ.get("CUDA_VISIBLE_DEVICES")
+        gpu_number = config.gpu_id
+        
+        logger.info(f"推理使用GPU设备: {gpu_number} (环境变量: {current_gpu_env}, 角色配置: {config.gpu_id})")
+        
         return {
             "gpt_model": training_info.gpt_model_path,
             "sovits_model": training_info.sovits_model_path,
@@ -1110,7 +1116,7 @@ class CharacterBasedTrainingService:
             "output_path": output_path,
             "bert_path": model_paths["bert_dir"],
             "cnhubert_base_path": model_paths["cnhubert_dir"],
-            "gpu_number": config.gpu_id,
+            "gpu_number": gpu_number,
             "is_half": True
         }
     
