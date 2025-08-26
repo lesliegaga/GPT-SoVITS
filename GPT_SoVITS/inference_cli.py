@@ -55,9 +55,22 @@ def synthesize(
 
     # Change model weights
     change_gpt_weights(gpt_path=GPT_model_path)
-    change_sovits_weights(sovits_path=SoVITS_model_path)
+    # 与 inference_webui.py 用法保持一致：显式 next(...) 触发加载；
+    # 同时兼容 fast 版本（非生成器实现）。
+    try:
+        it = change_sovits_weights(sovits_path=SoVITS_model_path)
+        try:
+            next(it)
+        except StopIteration:
+            pass
+        except TypeError:
+            # 非生成器实现，直接调用已生效
+            pass
+    except Exception:
+        # 兼容性兜底：不阻断后续流程
+        pass
 
-    # Synthesize audio
+    # Synthesize audio（该函数按片段逐步yield音频，需拼接所有片段）
     synthesis_result = get_tts_wav(
         ref_wav_path=ref_audio_path,
         prompt_text=ref_text,
@@ -67,13 +80,20 @@ def synthesize(
         top_p=1,
         temperature=1,
     )
+    # 逐段收集并拼接音频，避免只保存最后一段导致“1秒无声”问题
+    import numpy as np
+    concatenated_audio = []
+    sampling_rate = None
+    for seg_sr, seg_audio in synthesis_result:
+        if sampling_rate is None:
+            sampling_rate = seg_sr
+        # 简单假设分段采样率一致（与webui一致）。如不一致，可在此处重采样。
+        concatenated_audio.append(seg_audio)
 
-    result_list = list(synthesis_result)
-
-    if result_list:
-        last_sampling_rate, last_audio_data = result_list[-1]
+    if concatenated_audio and sampling_rate is not None:
+        full_audio = np.concatenate(concatenated_audio, axis=0)
         output_wav_path = os.path.join(output_path, "output.wav")
-        sf.write(output_wav_path, last_audio_data, last_sampling_rate)
+        sf.write(output_wav_path, full_audio, sampling_rate)
         print(f"Audio saved to {output_wav_path}")
 
 
