@@ -777,6 +777,12 @@ class CharacterBasedTrainingService:
                         self.update_character_audio_count(character_name)
                         self._update_character_status(character_name)
                         
+                        # 自动检查模型状态
+                        if self._check_models_exist(character_name):
+                            logger.info(f"✅ 角色 {character_name} 已训练完成")
+                        else:
+                            logger.info(f"⚠️  角色 {character_name} 尚未训练完成")
+                        
                         logger.info(f"加载角色: {character_name}")
                         
                     except Exception as e:
@@ -838,13 +844,59 @@ class CharacterBasedTrainingService:
     
     def _check_models_exist(self, character_name: str) -> bool:
         """检查模型是否存在"""
+        # 首先检查training_db中的路径
         training_info = training_db.get(character_name)
         if training_info and training_info.gpt_model_path and training_info.sovits_model_path:
             gpt_exists = Path(training_info.gpt_model_path).exists()
             sovits_exists = Path(training_info.sovits_model_path).exists()
-            return gpt_exists and sovits_exists
+            if gpt_exists and sovits_exists:
+                return True
         
-        return False
+        # 如果training_db中没有或路径无效，直接查找文件系统
+        return self._find_models_in_filesystem(character_name)
+    
+    def _find_models_in_filesystem(self, character_name: str) -> bool:
+        """在文件系统中查找模型文件"""
+        try:
+            # 查找GPT模型
+            gpt_weights_dir = self.base_dir / "GPT_weights_v2ProPlus"
+            if gpt_weights_dir.exists():
+                gpt_files = list(gpt_weights_dir.glob(f"{character_name}*.ckpt"))
+                if gpt_files:
+                    # 选择最新的GPT模型
+                    latest_gpt = max(gpt_files, key=lambda x: x.stat().st_mtime)
+                    
+                    # 查找SoVITS模型
+                    sovits_weights_dir = self.base_dir / "SoVITS_weights_v2ProPlus"
+                    if sovits_weights_dir.exists():
+                        sovits_files = list(sovits_weights_dir.glob(f"{character_name}*.pth"))
+                        if sovits_files:
+                            # 选择最新的SoVITS模型
+                            latest_sovits = max(sovits_files, key=lambda x: x.stat().st_mtime)
+                            
+                            # 更新training_db
+                            if character_name not in training_db:
+                                training_db[character_name] = TrainingInfo(
+                                    character_name=character_name,
+                                    status=ProcessingStatus.COMPLETED,
+                                    gpt_model_path=str(latest_gpt),
+                                    sovits_model_path=str(latest_sovits)
+                                )
+                            else:
+                                training_db[character_name].gpt_model_path = str(latest_gpt)
+                                training_db[character_name].sovits_model_path = str(latest_sovits)
+                                training_db[character_name].status = ProcessingStatus.COMPLETED
+                            
+                            logger.info(f"✅ 发现已训练的模型: {character_name}")
+                            logger.info(f"   GPT模型: {latest_gpt}")
+                            logger.info(f"   SoVITS模型: {latest_sovits}")
+                            return True
+            
+            return False
+            
+        except Exception as e:
+            logger.warning(f"查找模型文件失败 {character_name}: {e}")
+            return False
     
     def _build_training_config(self, character_name: str) -> Dict[str, Any]:
         """构建训练配置"""
@@ -923,23 +975,29 @@ class CharacterBasedTrainingService:
         training_info = training_db[character_name]
         
         try:
-            # 查找GPT模型
+            # 查找GPT模型 - 按角色名称查找
             gpt_weights_dir = self.base_dir / "GPT_weights_v2ProPlus"
             if gpt_weights_dir.exists():
-                gpt_files = list(gpt_weights_dir.glob("*.ckpt"))
+                gpt_files = list(gpt_weights_dir.glob(f"{character_name}*.ckpt"))
                 if gpt_files:
                     # 选择最新的GPT模型
                     latest_gpt = max(gpt_files, key=lambda x: x.stat().st_mtime)
                     training_info.gpt_model_path = str(latest_gpt)
+                    logger.info(f"✅ 找到GPT模型: {latest_gpt}")
+                else:
+                    logger.warning(f"未找到角色 {character_name} 的GPT模型")
             
-            # 查找SoVITS模型
+            # 查找SoVITS模型 - 按角色名称查找
             sovits_weights_dir = self.base_dir / "SoVITS_weights_v2ProPlus"
             if sovits_weights_dir.exists():
-                sovits_files = list(sovits_weights_dir.glob("*.pth"))
+                sovits_files = list(sovits_weights_dir.glob(f"{character_name}*.pth"))
                 if sovits_files:
                     # 选择最新的SoVITS模型
                     latest_sovits = max(sovits_files, key=lambda x: x.stat().st_mtime)
                     training_info.sovits_model_path = str(latest_sovits)
+                    logger.info(f"✅ 找到SoVITS模型: {latest_sovits}")
+                else:
+                    logger.warning(f"未找到角色 {character_name} 的SoVITS模型")
                     
         except Exception as e:
             logger.warning(f"查找训练模型失败 {character_name}: {e}")
