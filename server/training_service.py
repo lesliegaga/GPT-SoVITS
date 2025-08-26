@@ -111,6 +111,40 @@ def check_and_fix_nltk_cmudict():
         logger.error(f"❌ NLTK检查异常: {e}")
         return False
 
+# 新增：检查并修复NLTK英文词性标注器
+def check_and_fix_nltk_tagger():
+    """检查并修复NLTK averaged_perceptron_tagger_eng 数据包"""
+    try:
+        import nltk
+
+        # 尝试直接查找标注器
+        try:
+            nltk.data.find('taggers/averaged_perceptron_tagger_eng')
+            logger.info("✅ NLTK averaged_perceptron_tagger_eng 检查通过")
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️ 标注器检查失败: {e}")
+
+        # 下载标注器
+        logger.info("📥 正在下载 NLTK averaged_perceptron_tagger_eng …")
+        nltk.download('averaged_perceptron_tagger_eng', force=True)
+
+        # 再次确认
+        try:
+            nltk.data.find('taggers/averaged_perceptron_tagger_eng')
+            logger.info("✅ NLTK averaged_perceptron_tagger_eng 修复成功")
+            return True
+        except Exception as e:
+            logger.error(f"❌ 标注器修复失败: {e}")
+            return False
+
+    except ImportError:
+        logger.warning("⚠️ NLTK未安装，跳过标注器检查")
+        return True
+    except Exception as e:
+        logger.error(f"❌ NLTK标注器检查异常: {e}")
+        return False
+
 # 处理状态枚举
 class ProcessingStatus(str, Enum):
     PENDING = "pending"      # 等待处理
@@ -255,6 +289,9 @@ class CharacterBasedTrainingService:
         # 检查并修复NLTK CMU词典
         logger.info("🔍 检查NLTK CMU词典...")
         check_and_fix_nltk_cmudict()
+        # 检查并修复NLTK英文词性标注器
+        logger.info("🔍 检查NLTK averaged_perceptron_tagger_eng …")
+        check_and_fix_nltk_tagger()
         
         # 加载现有角色和默认角色设置
         self._load_existing_characters()
@@ -801,6 +838,9 @@ class CharacterBasedTrainingService:
             # 推理前再次检查NLTK CMU词典（防止运行时问题）
             if not check_and_fix_nltk_cmudict():
                 raise ValueError("NLTK CMU词典检查失败，无法进行推理")
+            # 推理前检查英文词性标注器
+            if not check_and_fix_nltk_tagger():
+                raise ValueError("NLTK averaged_perceptron_tagger_eng 检查失败，无法进行推理")
             
             # 构建推理参数
             inference_params = await self._build_inference_params(character_name, request)
