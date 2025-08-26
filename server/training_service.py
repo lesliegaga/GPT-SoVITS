@@ -12,6 +12,7 @@ import asyncio
 import subprocess
 import argparse
 import logging
+import shutil
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from pathlib import Path
@@ -46,58 +47,120 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 任务状态枚举
-class TaskStatus(str, Enum):
-    CREATED = "created"
-    RUNNING = "running" 
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+# 处理状态枚举
+class ProcessingStatus(str, Enum):
+    PENDING = "pending"      # 等待处理
+    RUNNING = "running"      # 正在处理
+    COMPLETED = "completed"  # 处理完成
+    FAILED = "failed"        # 处理失败
+    CANCELLED = "cancelled"  # 已取消
 
-# 训练步骤枚举
-class TrainingStep(str, Enum):
+# 音频处理步骤枚举
+class AudioProcessingStep(str, Enum):
     CONVERT_AUDIO = "convert_audio"
     SLICE_AUDIO = "slice_audio"
     DENOISE_AUDIO = "denoise_audio"
     ASR_TRANSCRIBE = "asr_transcribe"
+
+# 训练步骤枚举
+class TrainingStep(str, Enum):
     EXTRACT_TEXT_FEATURES = "extract_text_features"
     EXTRACT_AUDIO_FEATURES = "extract_audio_features"
     EXTRACT_SPEAKER_VECTORS = "extract_speaker_vectors"
     EXTRACT_SEMANTIC_FEATURES = "extract_semantic_features"
     TRAIN_SOVITS = "train_sovits"
     TRAIN_GPT = "train_gpt"
+
+# 推理步骤枚举
+class InferenceStep(str, Enum):
     TEST_INFERENCE = "test_inference"
 
-# 数据模型
-class TaskConfig(BaseModel):
-    exp_name: str = Field(default="my_speaker", description="实验名称")
+# 角色配置模型
+class CharacterConfig(BaseModel):
+    character_name: str = Field(description="角色名称")
     language: str = Field(default="zh", description="语言设置")
     batch_size: int = Field(default=16, description="批次大小")
     epochs_s2: int = Field(default=50, description="SoVITS训练轮数")
     epochs_s1: int = Field(default=15, description="GPT训练轮数")
     gpu_id: str = Field(default=os.environ.get("CUDA_VISIBLE_DEVICES", "0"), description="GPU设备ID")
+    enable_denoise: bool = Field(default=True, description="是否启用降噪")
 
-class TaskCreateRequest(BaseModel):
-    task_name: str = Field(description="任务名称")
-    config: TaskConfig = Field(description="训练配置")
+# 角色创建请求
+class CharacterCreateRequest(BaseModel):
+    character_name: str = Field(description="角色名称")
+    config: CharacterConfig = Field(description="角色配置")
 
-class TaskInfo(BaseModel):
-    task_id: str
-    task_name: str
-    status: TaskStatus
-    config: TaskConfig
+# 角色重命名请求
+class CharacterRenameRequest(BaseModel):
+    new_name: str = Field(description="新角色名称")
+
+# 角色信息模型
+class CharacterInfo(BaseModel):
+    character_name: str
+    config: CharacterConfig
     created_at: datetime
     updated_at: datetime
+    audio_count: int = 0
+    audio_processing_status: ProcessingStatus = ProcessingStatus.PENDING
+    training_status: ProcessingStatus = ProcessingStatus.PENDING
+    model_exists: bool = False
+    is_default: bool = False
+
+# 音频处理信息模型
+class AudioProcessingInfo(BaseModel):
+    character_name: str
+    status: ProcessingStatus
     current_step: Optional[str] = None
     progress: float = 0.0
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    processed_audio_count: int = 0
+
+# 训练信息模型
+class TrainingInfo(BaseModel):
+    character_name: str
+    status: ProcessingStatus
+    current_step: Optional[str] = None
+    progress: float = 0.0
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    gpt_model_path: Optional[str] = None
+    sovits_model_path: Optional[str] = None
+
+# 推理请求模型
+class InferenceRequest(BaseModel):
+    character_name: Optional[str] = Field(default=None, description="角色名称，为空则使用默认角色")
+    target_text: str = Field(description="目标文本")
+    ref_audio: Optional[str] = Field(default=None, description="参考音频路径")
+    ref_text: Optional[str] = Field(default=None, description="参考文本")
+    ref_language: str = Field(default="中文", description="参考语言")
+    target_language: str = Field(default="中文", description="目标语言")
+    output_name: Optional[str] = Field(default=None, description="输出文件名")
+
+# 推理信息模型
+class InferenceInfo(BaseModel):
+    inference_id: str
+    character_name: str
+    target_text: str
+    status: ProcessingStatus
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    output_path: Optional[str] = None
     error_message: Optional[str] = None
 
+# 步骤执行请求模型
 class StepExecuteRequest(BaseModel):
     params: Optional[Dict[str, Any]] = Field(default_factory=dict, description="步骤特定参数")
 
-# 全局任务存储
-tasks_db: Dict[str, TaskInfo] = {}
+# 全局数据存储
+characters_db: Dict[str, CharacterInfo] = {}
+audio_processing_db: Dict[str, AudioProcessingInfo] = {}
+training_db: Dict[str, TrainingInfo] = {}
+inference_db: Dict[str, InferenceInfo] = {}
 step_processes: Dict[str, subprocess.Popen] = {}
+default_character: Optional[str] = None
 
 # FastAPI应用
 app = FastAPI(
@@ -106,8 +169,8 @@ app = FastAPI(
     version="1.0.0"
 )
 
-class TrainingService:
-    """训练服务核心类"""
+class CharacterBasedTrainingService:
+    """基于角色的训练服务核心类"""
     
     def __init__(self):
         # 使用配置文件获取路径
@@ -117,140 +180,447 @@ class TrainingService:
         self.step_processor = StepProcessor(str(self.base_dir))
         self.config_generator = ConfigGenerator(str(self.base_dir))
         
+        # 创建角色目录
+        self.characters_dir = self.work_dir / "characters"
+        self.characters_dir.mkdir(exist_ok=True)
+        
+        # 创建推理输出目录
+        self.inference_output_dir = self.work_dir / "inference_output"
+        self.inference_output_dir.mkdir(exist_ok=True)
+        
+        # 加载现有角色和默认角色设置
+        self._load_existing_characters()
+        self._load_default_character()
+        
         logger.info(f"✅ 初始化完成:")
         logger.info(f"   基础目录: {self.base_dir}")
         logger.info(f"   工作目录: {self.work_dir}")
+        logger.info(f"   角色目录: {self.characters_dir}")
+        logger.info(f"   推理输出目录: {self.inference_output_dir}")
     
-    def get_task_dir(self, task_id: str) -> Path:
-        """获取任务工作目录"""
-        task_dir = self.work_dir / task_id
-        task_dir.mkdir(exist_ok=True)
-        return task_dir
+    # ==================== 角色管理 ====================
     
-    def get_task_input_dir(self, task_id: str) -> Path:
-        """获取任务输入目录"""
-        input_dir = self.get_task_dir(task_id) / "input_audio"
-        input_dir.mkdir(exist_ok=True)
-        return input_dir
+    def create_character(self, character_name: str, config: CharacterConfig) -> CharacterInfo:
+        """创建新角色"""
+        if character_name in characters_db:
+            raise ValueError(f"角色已存在: {character_name}")
+        
+        # 验证角色名称（避免特殊字符）
+        if not character_name.replace('_', '').replace('-', '').isalnum():
+            raise ValueError("角色名称只能包含字母、数字、下划线和连字符")
+        
+        # 创建角色目录结构
+        character_dir = self.get_character_dir(character_name)
+        character_dir.mkdir(exist_ok=True)
+        
+        # 创建子目录
+        (character_dir / "raw_audio").mkdir(exist_ok=True)
+        (character_dir / "converted_audio").mkdir(exist_ok=True)
+        (character_dir / "sliced_audio").mkdir(exist_ok=True)
+        (character_dir / "denoised_audio").mkdir(exist_ok=True)
+        (character_dir / "transcripts").mkdir(exist_ok=True)
+        (character_dir / "experiments").mkdir(exist_ok=True)
+        (character_dir / "models").mkdir(exist_ok=True)
+        
+        # 创建角色信息
+        character_info = CharacterInfo(
+            character_name=character_name,
+            config=config,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        
+        # 保存到数据库
+        characters_db[character_name] = character_info
+        
+        # 保存角色配置文件
+        self._save_character_config(character_name, character_info)
+        
+        # 如果是第一个角色，设置为默认角色
+        global default_character
+        if default_character is None:
+            default_character = character_name
+            character_info.is_default = True
+            self._save_default_character()
+        
+        logger.info(f"✅ 角色创建成功: {character_name}")
+        return character_info
     
-    def get_task_output_dir(self, task_id: str) -> Path:
-        """获取任务输出目录"""
-        output_dir = self.get_task_dir(task_id) / "output"
-        output_dir.mkdir(exist_ok=True)
-        return output_dir
+    def rename_character(self, old_name: str, new_name: str) -> CharacterInfo:
+        """重命名角色"""
+        if old_name not in characters_db:
+            raise ValueError(f"角色不存在: {old_name}")
+        
+        if new_name in characters_db:
+            raise ValueError(f"新角色名称已存在: {new_name}")
+        
+        # 验证新角色名称
+        if not new_name.replace('_', '').replace('-', '').isalnum():
+            raise ValueError("角色名称只能包含字母、数字、下划线和连字符")
+        
+        # 重命名目录
+        old_dir = self.get_character_dir(old_name)
+        new_dir = self.get_character_dir(new_name)
+        
+        if old_dir.exists():
+            shutil.move(str(old_dir), str(new_dir))
+        
+        # 更新数据库
+        character_info = characters_db[old_name]
+        character_info.character_name = new_name
+        character_info.config.character_name = new_name
+        character_info.updated_at = datetime.now()
+        
+        characters_db[new_name] = character_info
+        del characters_db[old_name]
+        
+        # 更新音频处理和训练信息
+        if old_name in audio_processing_db:
+            audio_processing_db[old_name].character_name = new_name
+            audio_processing_db[new_name] = audio_processing_db[old_name]
+            del audio_processing_db[old_name]
+        
+        if old_name in training_db:
+            training_db[old_name].character_name = new_name
+            training_db[new_name] = training_db[old_name]
+            del training_db[old_name]
+        
+        # 更新默认角色
+        global default_character
+        if default_character == old_name:
+            default_character = new_name
+            character_info.is_default = True
+            self._save_default_character()
+        
+        # 保存配置
+        self._save_character_config(new_name, character_info)
+        
+        logger.info(f"✅ 角色重命名成功: {old_name} -> {new_name}")
+        return character_info
     
-    def create_task_config_file(self, task_id: str, config: TaskConfig) -> Path:
-        """创建任务配置文件"""
-        task_dir = self.get_task_dir(task_id)
-        config_file = task_dir / "task_config.json"
+    def delete_character(self, character_name: str) -> bool:
+        """删除角色"""
+        if character_name not in characters_db:
+            raise ValueError(f"角色不存在: {character_name}")
         
-        # 获取模型路径配置
-        model_paths = get_model_paths()
+        # 删除目录
+        character_dir = self.get_character_dir(character_name)
+        if character_dir.exists():
+            shutil.rmtree(character_dir)
         
-        # 基于原始脚本的配置结构
-        task_config = {
-            "INPUT_AUDIO": str(self.get_task_input_dir(task_id)),
-            "WORK_DIR": str(task_dir),
-            "EXP_NAME": config.exp_name,
-            "EXP_DIR": str(task_dir / "experiments" / config.exp_name),
-            "SLICED_DIR": str(task_dir / "sliced"),
-            "DENOISED_DIR": str(task_dir / "denoised"), 
-            "ASR_OUTPUT": str(task_dir / "transcripts"),
-            "BERT_DIR": model_paths["bert_dir"],
-            "CNHUBERT_DIR": model_paths["cnhubert_dir"],
-            "PRETRAINED_SV": model_paths["pretrained_sv"],
-            "BATCH_SIZE": config.batch_size,
-            "EPOCHS_S2": config.epochs_s2,
-            "EPOCHS_S1": config.epochs_s1,
-            "GPU_ID": config.gpu_id,
-            "LANGUAGE": config.language
-        }
+        # 删除数据库记录
+        del characters_db[character_name]
         
-        with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(task_config, f, indent=2, ensure_ascii=False)
+        if character_name in audio_processing_db:
+            del audio_processing_db[character_name]
         
-        return config_file
+        if character_name in training_db:
+            del training_db[character_name]
+        
+        # 更新默认角色
+        global default_character
+        if default_character == character_name:
+            # 选择另一个角色作为默认角色
+            remaining_characters = list(characters_db.keys())
+            if remaining_characters:
+                default_character = remaining_characters[0]
+                characters_db[default_character].is_default = True
+                self._save_default_character()
+            else:
+                default_character = None
+                # 删除默认角色配置文件
+                default_file = self.work_dir / "default_character.txt"
+                if default_file.exists():
+                    default_file.unlink()
+        
+        logger.info(f"✅ 角色删除成功: {character_name}")
+        return True
     
-    def load_task_config(self, task_id: str) -> Dict[str, Any]:
-        """加载任务配置"""
-        config_file = self.get_task_dir(task_id) / "task_config.json"
-        if not config_file.exists():
-            raise FileNotFoundError(f"任务配置文件不存在: {config_file}")
+    def set_default_character(self, character_name: str) -> bool:
+        """设置默认角色"""
+        if character_name not in characters_db:
+            raise ValueError(f"角色不存在: {character_name}")
         
-        with open(config_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        global default_character
+        
+        # 清除旧的默认标记
+        if default_character and default_character in characters_db:
+            characters_db[default_character].is_default = False
+        
+        # 设置新的默认角色
+        default_character = character_name
+        characters_db[character_name].is_default = True
+        
+        # 保存配置
+        self._save_default_character()
+        
+        logger.info(f"✅ 默认角色设置为: {character_name}")
+        return True
     
-    async def execute_step(self, task_id: str, step: TrainingStep, params: Dict[str, Any] = None):
-        """执行训练步骤"""
-        if task_id not in tasks_db:
-            raise HTTPException(status_code=404, detail="任务不存在")
+    def get_default_character(self) -> Optional[str]:
+        """获取默认角色"""
+        return default_character
+    
+    def list_characters(self) -> List[CharacterInfo]:
+        """列出所有角色"""
+        return list(characters_db.values())
+    
+    def get_character(self, character_name: str) -> CharacterInfo:
+        """获取角色信息"""
+        if character_name not in characters_db:
+            raise ValueError(f"角色不存在: {character_name}")
+        return characters_db[character_name]
+    
+    # ==================== 目录管理 ====================
+    
+    def get_character_dir(self, character_name: str) -> Path:
+        """获取角色目录"""
+        return self.characters_dir / character_name
+    
+    def get_character_raw_audio_dir(self, character_name: str) -> Path:
+        """获取角色原始音频目录"""
+        return self.get_character_dir(character_name) / "raw_audio"
+    
+    def get_character_converted_audio_dir(self, character_name: str) -> Path:
+        """获取角色转换后音频目录"""
+        return self.get_character_dir(character_name) / "converted_audio"
+    
+    def get_character_sliced_audio_dir(self, character_name: str) -> Path:
+        """获取角色切片音频目录"""
+        return self.get_character_dir(character_name) / "sliced_audio"
+    
+    def get_character_denoised_audio_dir(self, character_name: str) -> Path:
+        """获取角色降噪音频目录"""
+        return self.get_character_dir(character_name) / "denoised_audio"
+    
+    def get_character_transcripts_dir(self, character_name: str) -> Path:
+        """获取角色转录目录"""
+        return self.get_character_dir(character_name) / "transcripts"
+    
+    def get_character_experiments_dir(self, character_name: str) -> Path:
+        """获取角色实验目录"""
+        exp_dir = self.get_character_dir(character_name) / "experiments" / character_name
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        return exp_dir
+    
+    def get_character_models_dir(self, character_name: str) -> Path:
+        """获取角色模型目录"""
+        return self.get_character_dir(character_name) / "models"
+    
+    # ==================== 音频处理管理 ====================
+    
+    def get_audio_count(self, character_name: str) -> int:
+        """获取角色音频数量"""
+        raw_audio_dir = self.get_character_raw_audio_dir(character_name)
+        if not raw_audio_dir.exists():
+            return 0
         
-        task_info = tasks_db[task_id]
-        if task_info.status == TaskStatus.RUNNING:
-            raise HTTPException(status_code=400, detail="任务正在运行中")
+        audio_files = []
+        for ext in ['wav', 'mp3', 'm4a', 'flac', 'aac']:
+            audio_files.extend(raw_audio_dir.glob(f"*.{ext}"))
         
-        # 更新任务状态
-        task_info.status = TaskStatus.RUNNING
-        task_info.current_step = step
-        task_info.updated_at = datetime.now()
+        return len(audio_files)
+    
+    def update_character_audio_count(self, character_name: str):
+        """更新角色音频数量"""
+        if character_name in characters_db:
+            characters_db[character_name].audio_count = self.get_audio_count(character_name)
+            characters_db[character_name].updated_at = datetime.now()
+    
+    async def start_audio_processing(self, character_name: str, steps: List[AudioProcessingStep] = None) -> AudioProcessingInfo:
+        """开始音频处理"""
+        if character_name not in characters_db:
+            raise ValueError(f"角色不存在: {character_name}")
         
-        # 设置当前步骤的起始进度
-        step_start_progress = self.get_step_progress(task_id, step)
-        task_info.progress = step_start_progress
-        logger.info(f"步骤 {step.value} 开始执行，起始进度: {step_start_progress:.1f}%")
+        if steps is None:
+            steps = [
+                AudioProcessingStep.CONVERT_AUDIO,
+                AudioProcessingStep.SLICE_AUDIO,
+                AudioProcessingStep.DENOISE_AUDIO,
+                AudioProcessingStep.ASR_TRANSCRIBE
+            ]
+            
+            # 如果禁用降噪，移除降噪步骤
+            if not characters_db[character_name].config.enable_denoise:
+                steps.remove(AudioProcessingStep.DENOISE_AUDIO)
+        
+        # 创建音频处理信息
+        processing_info = AudioProcessingInfo(
+            character_name=character_name,
+            status=ProcessingStatus.RUNNING,
+            started_at=datetime.now()
+        )
+        
+        audio_processing_db[character_name] = processing_info
+        characters_db[character_name].audio_processing_status = ProcessingStatus.RUNNING
+        
+        # 启动异步处理
+        asyncio.create_task(self._execute_audio_processing(character_name, steps))
+        
+        return processing_info
+    
+    async def _execute_audio_processing(self, character_name: str, steps: List[AudioProcessingStep]):
+        """执行音频处理步骤"""
+        processing_info = audio_processing_db[character_name]
         
         try:
-            config = self.load_task_config(task_id)
-            success = False
-            
-            # 使用StepProcessor执行具体步骤
-            if step == TrainingStep.CONVERT_AUDIO:
-                success = await self.step_processor.convert_audio(
-                    config["INPUT_AUDIO"],
-                    config["WORK_DIR"] + "/converted_wav"
-                )
-                # 更新配置中的输入目录
-                if success:
-                    config["INPUT_AUDIO"] = config["WORK_DIR"] + "/converted_wav"
-                    self._save_task_config(task_id, config)
-                    
-            elif step == TrainingStep.SLICE_AUDIO:
-                success = await self.step_processor.slice_audio(
-                    config["INPUT_AUDIO"],
-                    config["SLICED_DIR"],
-                    **(params or {})
-                )
+            for i, step in enumerate(steps):
+                processing_info.current_step = step.value
+                processing_info.progress = (i / len(steps)) * 100
                 
-            elif step == TrainingStep.DENOISE_AUDIO:
-                success = await self.step_processor.denoise_audio(
-                    config["SLICED_DIR"],
-                    config["DENOISED_DIR"],
-                    params.get("precision", "float16") if params else "float16"
-                )
+                logger.info(f"开始执行 {character_name} 的音频处理步骤: {step.value}")
                 
-            elif step == TrainingStep.ASR_TRANSCRIBE:
-                success = await self.step_processor.asr_transcribe(
-                    config["DENOISED_DIR"],
-                    config["ASR_OUTPUT"],
-                    config["LANGUAGE"],
-                    params.get("precision", "float16") if params else "float16"
-                )
+                success = await self._execute_audio_processing_step(character_name, step)
                 
-            elif step == TrainingStep.EXTRACT_TEXT_FEATURES:
-                # 修复：确保ASR输出指向具体的文件而不是目录
-                try:
-                    asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
-                    if asr_output != config["ASR_OUTPUT"]:
-                        logger.info(f"✅ 找到ASR输出文件: {asr_output}")
-                        # 更新配置
-                        config["ASR_OUTPUT"] = asr_output
-                        self._save_task_config(task_id, config)
-                except FileNotFoundError as e:
-                    logger.error(f"❌ ASR输出文件查找失败: {e}")
-                    task_info.status = TaskStatus.FAILED
-                    task_info.error_message = str(e)
+                if not success:
+                    processing_info.status = ProcessingStatus.FAILED
+                    processing_info.error_message = f"步骤 {step.value} 失败"
+                    characters_db[character_name].audio_processing_status = ProcessingStatus.FAILED
                     return
+            
+            # 所有步骤完成
+            processing_info.status = ProcessingStatus.COMPLETED
+            processing_info.progress = 100.0
+            processing_info.completed_at = datetime.now()
+            processing_info.processed_audio_count = self.get_processed_audio_count(character_name)
+            
+            characters_db[character_name].audio_processing_status = ProcessingStatus.COMPLETED
+            
+            logger.info(f"✅ {character_name} 音频处理完成")
+            
+        except Exception as e:
+            processing_info.status = ProcessingStatus.FAILED
+            processing_info.error_message = str(e)
+            characters_db[character_name].audio_processing_status = ProcessingStatus.FAILED
+            logger.error(f"❌ {character_name} 音频处理失败: {e}")
+    
+    async def _execute_audio_processing_step(self, character_name: str, step: AudioProcessingStep) -> bool:
+        """执行单个音频处理步骤"""
+        try:
+            if step == AudioProcessingStep.CONVERT_AUDIO:
+                input_dir = str(self.get_character_raw_audio_dir(character_name))
+                output_dir = str(self.get_character_converted_audio_dir(character_name))
+                return await self.step_processor.convert_audio(input_dir, output_dir)
                 
+            elif step == AudioProcessingStep.SLICE_AUDIO:
+                input_dir = str(self.get_character_converted_audio_dir(character_name))
+                output_dir = str(self.get_character_sliced_audio_dir(character_name))
+                return await self.step_processor.slice_audio(input_dir, output_dir)
+                
+            elif step == AudioProcessingStep.DENOISE_AUDIO:
+                input_dir = str(self.get_character_sliced_audio_dir(character_name))
+                output_dir = str(self.get_character_denoised_audio_dir(character_name))
+                return await self.step_processor.denoise_audio(input_dir, output_dir)
+                
+            elif step == AudioProcessingStep.ASR_TRANSCRIBE:
+                if characters_db[character_name].config.enable_denoise:
+                    input_dir = str(self.get_character_denoised_audio_dir(character_name))
+                else:
+                    input_dir = str(self.get_character_sliced_audio_dir(character_name))
+                    
+                output_dir = str(self.get_character_transcripts_dir(character_name))
+                language = characters_db[character_name].config.language
+                return await self.step_processor.asr_transcribe(input_dir, output_dir, language)
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"音频处理步骤 {step.value} 失败: {e}")
+            return False
+    
+    def get_processed_audio_count(self, character_name: str) -> int:
+        """获取已处理音频数量"""
+        if characters_db[character_name].config.enable_denoise:
+            audio_dir = self.get_character_denoised_audio_dir(character_name)
+        else:
+            audio_dir = self.get_character_sliced_audio_dir(character_name)
+            
+        if not audio_dir.exists():
+            return 0
+            
+        audio_files = list(audio_dir.glob("*.wav"))
+        return len(audio_files)
+    
+    # ==================== 训练管理 ====================
+    
+    async def start_training(self, character_name: str, steps: List[TrainingStep] = None) -> TrainingInfo:
+        """开始训练"""
+        if character_name not in characters_db:
+            raise ValueError(f"角色不存在: {character_name}")
+        
+        # 检查音频处理是否完成
+        if characters_db[character_name].audio_processing_status != ProcessingStatus.COMPLETED:
+            raise ValueError(f"角色 {character_name} 的音频处理尚未完成，无法开始训练")
+        
+        if steps is None:
+            steps = [
+                TrainingStep.EXTRACT_TEXT_FEATURES,
+                TrainingStep.EXTRACT_AUDIO_FEATURES,
+                TrainingStep.EXTRACT_SPEAKER_VECTORS,
+                TrainingStep.EXTRACT_SEMANTIC_FEATURES,
+                TrainingStep.TRAIN_SOVITS,
+                TrainingStep.TRAIN_GPT
+            ]
+        
+        # 创建训练信息
+        training_info = TrainingInfo(
+            character_name=character_name,
+            status=ProcessingStatus.RUNNING,
+            started_at=datetime.now()
+        )
+        
+        training_db[character_name] = training_info
+        characters_db[character_name].training_status = ProcessingStatus.RUNNING
+        
+        # 启动异步训练
+        asyncio.create_task(self._execute_training(character_name, steps))
+        
+        return training_info
+    
+    async def _execute_training(self, character_name: str, steps: List[TrainingStep]):
+        """执行训练步骤"""
+        training_info = training_db[character_name]
+        
+        try:
+            for i, step in enumerate(steps):
+                training_info.current_step = step.value
+                training_info.progress = (i / len(steps)) * 100
+                
+                logger.info(f"开始执行 {character_name} 的训练步骤: {step.value}")
+                
+                success = await self._execute_training_step(character_name, step)
+                
+                if not success:
+                    training_info.status = ProcessingStatus.FAILED
+                    training_info.error_message = f"步骤 {step.value} 失败"
+                    characters_db[character_name].training_status = ProcessingStatus.FAILED
+                    return
+            
+            # 所有步骤完成
+            training_info.status = ProcessingStatus.COMPLETED
+            training_info.progress = 100.0
+            training_info.completed_at = datetime.now()
+            
+            # 查找生成的模型文件
+            self._find_trained_models(character_name)
+            
+            characters_db[character_name].training_status = ProcessingStatus.COMPLETED
+            characters_db[character_name].model_exists = True
+            
+            logger.info(f"✅ {character_name} 训练完成")
+            
+        except Exception as e:
+            training_info.status = ProcessingStatus.FAILED
+            training_info.error_message = str(e)
+            characters_db[character_name].training_status = ProcessingStatus.FAILED
+            logger.error(f"❌ {character_name} 训练失败: {e}")
+    
+    async def _execute_training_step(self, character_name: str, step: TrainingStep) -> bool:
+        """执行单个训练步骤"""
+        try:
+            config = self._build_training_config(character_name)
+            
+            if step == TrainingStep.EXTRACT_TEXT_FEATURES:
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
@@ -260,73 +630,32 @@ class TrainingService:
                 )
                 
                 if success:
-                    # 合并分片文件
                     await self.step_processor.merge_feature_files(
                         config["EXP_DIR"], "2-name2text-{}.txt", "2-name2text.txt", 
                         has_header=False, parallel_parts=parallel_parts
                     )
-                    
-            elif step == TrainingStep.EXTRACT_AUDIO_FEATURES:
-                # 修复：确保ASR输出指向具体的文件而不是目录
-                try:
-                    asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
-                    if asr_output != config["ASR_OUTPUT"]:
-                        logger.info(f"✅ 找到ASR输出文件: {asr_output}")
-                        # 更新配置
-                        config["ASR_OUTPUT"] = asr_output
-                        self._save_task_config(task_id, config)
-                except FileNotFoundError as e:
-                    logger.error(f"❌ ASR输出文件查找失败: {e}")
-                    task_info.status = TaskStatus.FAILED
-                    task_info.error_message = str(e)
-                    return
                 
+                return success
+                
+            elif step == TrainingStep.EXTRACT_AUDIO_FEATURES:
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
                 
-                success = await self.step_processor.extract_features(
+                return await self.step_processor.extract_features(
                     "2-get-hubert-wav32k.py", env_vars, parallel_parts, gpu_ids
                 )
                 
             elif step == TrainingStep.EXTRACT_SPEAKER_VECTORS:
-                # 修复：确保ASR输出指向具体的文件而不是目录
-                try:
-                    asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
-                    if asr_output != config["ASR_OUTPUT"]:
-                        logger.info(f"✅ 找到ASR输出文件: {asr_output}")
-                        # 更新配置
-                        config["ASR_OUTPUT"] = asr_output
-                        self._save_task_config(task_id, config)
-                except FileNotFoundError as e:
-                    logger.error(f"❌ ASR输出文件查找失败: {e}")
-                    task_info.status = TaskStatus.FAILED
-                    task_info.error_message = str(e)
-                    return
-                
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
                 
-                success = await self.step_processor.extract_features(
+                return await self.step_processor.extract_features(
                     "2-get-sv.py", env_vars, parallel_parts, gpu_ids
                 )
                 
             elif step == TrainingStep.EXTRACT_SEMANTIC_FEATURES:
-                # 修复：确保ASR输出指向具体的文件而不是目录
-                try:
-                    asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
-                    if asr_output != config["ASR_OUTPUT"]:
-                        logger.info(f"✅ 找到ASR输出文件: {asr_output}")
-                        # 更新配置
-                        config["ASR_OUTPUT"] = asr_output
-                        self._save_task_config(task_id, config)
-                except FileNotFoundError as e:
-                    logger.error(f"❌ ASR输出文件查找失败: {e}")
-                    task_info.status = TaskStatus.FAILED
-                    task_info.error_message = str(e)
-                    return
-                
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
@@ -336,243 +665,235 @@ class TrainingService:
                 )
                 
                 if success:
-                    # 合并分片文件
                     await self.step_processor.merge_feature_files(
                         config["EXP_DIR"], "6-name2semantic-{}.tsv", "6-name2semantic.tsv", 
                         has_header=True, parallel_parts=parallel_parts
                     )
-                    
-            elif step == TrainingStep.TRAIN_SOVITS:
-                # 生成S2配置文件
-                s2_config_path = config["WORK_DIR"] + "/config_s2.json"
-                self.config_generator.generate_s2_config(config, s2_config_path)
                 
-                success = await self.step_processor.train_model(
-                    "s2_train.py", s2_config_path
-                )
+                return success
+                
+            elif step == TrainingStep.TRAIN_SOVITS:
+                s2_config_path = str(self.get_character_dir(character_name) / "config_s2.json")
+                self.config_generator.generate_s2_config(config, s2_config_path)
+                return await self.step_processor.train_model("s2_train.py", s2_config_path)
                 
             elif step == TrainingStep.TRAIN_GPT:
-                # 生成S1配置文件
-                s1_config_path = config["WORK_DIR"] + "/config_s1.yaml"
+                s1_config_path = str(self.get_character_dir(character_name) / "config_s1.yaml")
                 self.config_generator.generate_s1_config(config, s1_config_path)
-                
                 env_vars = {"hz": "25hz"}
-                success = await self.step_processor.train_model(
-                    "s1_train.py", s1_config_path, env_vars
-                )
-                
-            elif step == TrainingStep.TEST_INFERENCE:
-                inference_params = params or {}
-                
-                # 自动构建推理测试所需的参数
-                # 1. 查找训练好的模型文件（参考get_trained_models.py的逻辑）
-                import sys
-                
-                # 添加项目根路径到Python路径，以便导入config模块
-                if str(self.base_dir) not in sys.path:
-                    sys.path.insert(0, str(self.base_dir))
-                
-                try:
-                    from config import GPT_weight_version2root, SoVITS_weight_version2root
-                except ImportError:
-                    # 如果无法导入，使用默认值
-                    logger.warning("无法导入config模块，使用默认配置")
-                    GPT_weight_version2root = {
-                        "v1": "GPT_weights/",
-                        "v2": "GPT_weights_v2/",
-                        "v2Pro": "GPT_weights_v2Pro/",
-                        "v2ProPlus": "GPT_weights_v2ProPlus/"
-                    }
-                    SoVITS_weight_version2root = {
-                        "v1": "SoVITS_weights/",
-                        "v2": "SoVITS_weights_v2/",
-                        "v2Pro": "SoVITS_weights_v2Pro/",
-                        "v2ProPlus": "SoVITS_weights_v2ProPlus/"
-                    }
-                
-                # 获取版本信息
-                version = config.get("VERSION", "v2ProPlus")
-                
-                # 获取版本对应的权重目录
-                gpt_weight_dir = GPT_weight_version2root.get(version, "")
-                sovits_weight_dir = SoVITS_weight_version2root.get(version, "")
-                
-                if not gpt_weight_dir:
-                    raise FileNotFoundError(f"找不到版本 {version} 对应的GPT权重目录")
-                if not sovits_weight_dir:
-                    raise FileNotFoundError(f"找不到版本 {version} 对应的SoVITS权重目录")
-                
-                # 构建完整的权重目录路径
-                gpt_weights_dir = self.base_dir / gpt_weight_dir
-                sovits_weights_dir = self.base_dir / sovits_weight_dir
-                
-                # 查找GPT模型（.ckpt文件）
-                gpt_model = ""
-                if gpt_weights_dir.exists():
-                    gpt_files = list(gpt_weights_dir.glob("*.ckpt"))
-                    if gpt_files:
-                        # 选择最新的GPT模型（按修改时间排序）
-                        gpt_model = str(sorted(gpt_files, key=lambda x: x.stat().st_mtime)[-1])
-                
-                # 查找SoVITS模型（.pth文件）
-                sovits_model = ""
-                if sovits_weights_dir.exists():
-                    sovits_files = list(sovits_weights_dir.glob("*.pth"))
-                    if sovits_files:
-                        # 选择最新的SoVITS模型（按修改时间排序）
-                        sovits_model = str(sorted(sovits_files, key=lambda x: x.stat().st_mtime)[-1])
-                
-                if not gpt_model:
-                    raise FileNotFoundError(f"找不到训练好的GPT模型文件，请检查目录: {gpt_weights_dir}")
-                if not sovits_model:
-                    raise FileNotFoundError(f"找不到训练好的SoVITS模型文件，请检查目录: {sovits_weights_dir}")
-                
-                logger.info(f"找到模型文件: GPT={gpt_model}, SoVITS={sovits_model}")
-                
-                # 2. 查找参考音频和文本
-                ref_audio = ""
-                ref_text = ""
-                
-                # 从降噪后的音频中选择一个作为参考
-                denoised_dir = Path(config["DENOISED_DIR"])
-                if denoised_dir.exists():
-                    wav_files = list(denoised_dir.glob("*.wav"))
-                    if wav_files:
-                        ref_audio = str(wav_files[0])
-                
-                # 从ASR输出中提取对应的文本
-                asr_output = self._find_asr_output_file(config["ASR_OUTPUT"])
-                if asr_output and Path(asr_output).exists():
-                    # 根据参考音频文件名查找对应的文本
-                    ref_audio_name = Path(ref_audio).stem
-                    try:
-                        with open(asr_output, 'r', encoding='utf-8') as f:
-                            for line in f:
-                                if ref_audio_name in line:
-                                    # 解析不同格式的ASR输出
-                                    if '|' in line:
-                                        # .list格式: file_path|output_file_name|language|text
-                                        parts = line.strip().split('|')
-                                        if len(parts) >= 4:
-                                            ref_text = parts[3]
-                                            break
-                                    elif '\t' in line:
-                                        # .tsv格式: file_name\ttranscript
-                                        parts = line.strip().split('\t')
-                                        if len(parts) >= 2:
-                                            ref_text = parts[1]
-                                            break
-                                    else:
-                                        # 其他格式，使用整行
-                                        ref_text = line.strip()
-                                        break
-                    except Exception as e:
-                        logger.warning(f"读取ASR输出文件失败: {e}")
-                
-                if not ref_text:
-                    # 如果无法从ASR输出提取，使用默认文本
-                    ref_text = "这是一个参考音频的文本内容。"
-                
-                # 3. 创建目标文本文件
-                target_text = inference_params.get("target_text", "这是一个测试文本，用于验证训练好的模型效果。")
-                target_text_file = Path(config["WORK_DIR"]) / "target_text.txt"
-                target_text_file.parent.mkdir(parents=True, exist_ok=True)
-                with open(target_text_file, 'w', encoding='utf-8') as f:
-                    f.write(target_text)
-                
-                # 4. 创建参考文本文件
-                ref_text_file = Path(config["WORK_DIR"]) / "ref_text.txt"
-                with open(ref_text_file, 'w', encoding='utf-8') as f:
-                    f.write(ref_text)
-                
-                # 5. 确保输出目录存在
-                output_dir = Path(config["WORK_DIR"]) / "output"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"创建输出目录: {output_dir}")
-                
-                # 6. 构建完整的推理参数
-                inference_params.update({
-                    "gpt_model": gpt_model,
-                    "sovits_model": sovits_model,
-                    "ref_audio": ref_audio,
-                    "ref_text": str(ref_text_file),
-                    "target_text": str(target_text_file),
-                    "output_path": str(output_dir),
-                    "bert_path": config["BERT_DIR"],
-                    "cnhubert_base_path": config["CNHUBERT_DIR"],
-                    "gpu_number": config["GPU_ID"],
-                    "is_half": True,
-                    "ref_language": "中文",
-                    "target_language": "中文"
-                })
-                
-                logger.info(f"推理测试参数: GPT={gpt_model}, SoVITS={sovits_model}")
-                logger.info(f"参考音频: {ref_audio}, 参考文本: {ref_text}")
-                logger.info(f"目标文本: {target_text}")
-                
-                success = await self.step_processor.test_inference(**inference_params)
-                
-            else:
-                raise ValueError(f"不支持的训练步骤: {step}")
+                return await self.step_processor.train_model("s1_train.py", s1_config_path, env_vars)
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"训练步骤 {step.value} 失败: {e}")
+            return False
+    
+    # ==================== 推理管理 ====================
+    
+    async def start_inference(self, request: InferenceRequest) -> InferenceInfo:
+        """开始推理"""
+        # 确定使用的角色
+        character_name = request.character_name or default_character
+        
+        if not character_name:
+            raise ValueError("未指定角色且无默认角色")
+        
+        if character_name not in characters_db:
+            raise ValueError(f"角色不存在: {character_name}")
+        
+        if not characters_db[character_name].model_exists:
+            raise ValueError(f"角色 {character_name} 的模型尚未训练完成")
+        
+        # 创建推理信息
+        inference_id = str(uuid.uuid4())
+        inference_info = InferenceInfo(
+            inference_id=inference_id,
+            character_name=character_name,
+            target_text=request.target_text,
+            status=ProcessingStatus.RUNNING,
+            created_at=datetime.now()
+        )
+        
+        inference_db[inference_id] = inference_info
+        
+        # 启动异步推理
+        asyncio.create_task(self._execute_inference(inference_id, request))
+        
+        return inference_info
+    
+    async def _execute_inference(self, inference_id: str, request: InferenceRequest):
+        """执行推理"""
+        inference_info = inference_db[inference_id]
+        character_name = inference_info.character_name
+        
+        try:
+            # 构建推理参数
+            inference_params = await self._build_inference_params(character_name, request)
+            
+            # 执行推理
+            success = await self.step_processor.test_inference(**inference_params)
             
             if success:
-                task_info.status = TaskStatus.COMPLETED
-                self._update_progress(task_id, step)
-                logger.info(f"步骤 {step.value} 执行成功，任务 {task_id} 进度更新完成")
+                inference_info.status = ProcessingStatus.COMPLETED
+                inference_info.completed_at = datetime.now()
+                inference_info.output_path = inference_params.get("output_path")
+                logger.info(f"✅ 推理完成: {inference_id}")
             else:
-                task_info.status = TaskStatus.FAILED
-                task_info.error_message = f"步骤 {step} 执行失败"
-                logger.error(f"步骤 {step.value} 执行失败，任务 {task_id} 状态更新为失败")
+                inference_info.status = ProcessingStatus.FAILED
+                inference_info.error_message = "推理执行失败"
+                logger.error(f"❌ 推理失败: {inference_id}")
                 
         except Exception as e:
-            task_info.status = TaskStatus.FAILED
-            task_info.error_message = str(e)
-        finally:
-            task_info.updated_at = datetime.now()
+            inference_info.status = ProcessingStatus.FAILED
+            inference_info.error_message = str(e)
+            logger.error(f"❌ 推理异常: {inference_id} - {e}")
     
-    def _save_task_config(self, task_id: str, config: Dict[str, Any]):
-        """保存任务配置"""
-        config_file = self.get_task_dir(task_id) / "task_config.json"
+    # ==================== 辅助方法 ====================
+    
+    def _load_existing_characters(self):
+        """加载现有角色"""
+        if not self.characters_dir.exists():
+            return
+        
+        for character_dir in self.characters_dir.iterdir():
+            if character_dir.is_dir():
+                character_name = character_dir.name
+                config_file = character_dir / "character_config.json"
+                
+                if config_file.exists():
+                    try:
+                        with open(config_file, 'r', encoding='utf-8') as f:
+                            config_data = json.load(f)
+                        
+                        character_info = CharacterInfo(**config_data)
+                        characters_db[character_name] = character_info
+                        
+                        # 更新音频数量和状态
+                        self.update_character_audio_count(character_name)
+                        self._update_character_status(character_name)
+                        
+                        logger.info(f"加载角色: {character_name}")
+                        
+                    except Exception as e:
+                        logger.warning(f"加载角色配置失败 {character_name}: {e}")
+    
+    def _load_default_character(self):
+        """加载默认角色设置"""
+        global default_character
+        default_file = self.work_dir / "default_character.txt"
+        
+        if default_file.exists():
+            try:
+                with open(default_file, 'r', encoding='utf-8') as f:
+                    character_name = f.read().strip()
+                
+                if character_name in characters_db:
+                    default_character = character_name
+                    characters_db[character_name].is_default = True
+                    logger.info(f"加载默认角色: {character_name}")
+                else:
+                    logger.warning(f"默认角色不存在: {character_name}")
+                    
+            except Exception as e:
+                logger.warning(f"加载默认角色配置失败: {e}")
+    
+    def _save_character_config(self, character_name: str, character_info: CharacterInfo):
+        """保存角色配置"""
+        character_dir = self.get_character_dir(character_name)
+        config_file = character_dir / "character_config.json"
+        
+        config_data = character_info.dict()
+        
         with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
+            json.dump(config_data, f, indent=2, ensure_ascii=False, default=str)
+    
+    def _save_default_character(self):
+        """保存默认角色设置"""
+        global default_character
+        default_file = self.work_dir / "default_character.txt"
+        
+        if default_character:
+            with open(default_file, 'w', encoding='utf-8') as f:
+                f.write(default_character)
+    
+    def _update_character_status(self, character_name: str):
+        """更新角色状态"""
+        character_info = characters_db[character_name]
+        
+        # 检查音频处理状态
+        if character_name in audio_processing_db:
+            character_info.audio_processing_status = audio_processing_db[character_name].status
+        
+        # 检查训练状态
+        if character_name in training_db:
+            character_info.training_status = training_db[character_name].status
+        
+        # 检查模型是否存在
+        character_info.model_exists = self._check_models_exist(character_name)
+    
+    def _check_models_exist(self, character_name: str) -> bool:
+        """检查模型是否存在"""
+        training_info = training_db.get(character_name)
+        if training_info and training_info.gpt_model_path and training_info.sovits_model_path:
+            gpt_exists = Path(training_info.gpt_model_path).exists()
+            sovits_exists = Path(training_info.sovits_model_path).exists()
+            return gpt_exists and sovits_exists
+        
+        return False
+    
+    def _build_training_config(self, character_name: str) -> Dict[str, Any]:
+        """构建训练配置"""
+        character_info = characters_db[character_name]
+        config = character_info.config
+        
+        # 查找ASR输出文件
+        transcripts_dir = self.get_character_transcripts_dir(character_name)
+        asr_output = self._find_asr_output_file(str(transcripts_dir))
+        
+        if config.enable_denoise:
+            wav_dir = str(self.get_character_denoised_audio_dir(character_name))
+        else:
+            wav_dir = str(self.get_character_sliced_audio_dir(character_name))
+        
+        # 获取模型路径配置
+        model_paths = get_model_paths()
+        
+        return {
+            "ASR_OUTPUT": asr_output,
+            "DENOISED_DIR": wav_dir,
+            "EXP_NAME": character_name,
+            "EXP_DIR": str(self.get_character_experiments_dir(character_name)),
+            "BERT_DIR": model_paths["bert_dir"],
+            "CNHUBERT_DIR": model_paths["cnhubert_dir"],
+            "PRETRAINED_SV": model_paths["pretrained_sv"],
+            "BATCH_SIZE": config.batch_size,
+            "EPOCHS_S2": config.epochs_s2,
+            "EPOCHS_S1": config.epochs_s1,
+            "GPU_ID": config.gpu_id,
+            "LANGUAGE": config.language,
+            "IS_HALF": True,
+            "VERSION": "v2ProPlus"
+        }
     
     def _find_asr_output_file(self, asr_output_path: str) -> str:
         """智能查找ASR输出文件"""
         asr_path = Path(asr_output_path)
         
         if asr_path.is_file():
-            # 如果已经是文件，直接返回
             return str(asr_path)
         
         if asr_path.is_dir():
-            # 如果是目录，按优先级查找文件
-            # 优先级1: .list文件（标准格式）
-            list_files = list(asr_path.glob("*.list"))
-            if list_files:
-                return str(list_files[0])
+            # 按优先级查找文件
+            for pattern in ["*.list", "*.txt", "*.tsv"]:
+                files = list(asr_path.glob(pattern))
+                if files:
+                    return str(files[0])
             
-            # 优先级2: .txt文件
-            txt_files = list(asr_path.glob("*.txt"))
-            if txt_files:
-                return str(txt_files[0])
-            
-            # 优先级3: .tsv文件
-            tsv_files = list(asr_path.glob("*.tsv"))
-            if tsv_files:
-                return str(tsv_files[0])
-            
-            # 优先级4: 任何其他文件
-            other_files = list(asr_path.glob("*"))
-            if other_files:
-                return str(other_files[0])
-            
-            # 如果都找不到，抛出错误
             raise FileNotFoundError(f"在ASR输出目录中找不到转录文件: {asr_output_path}")
         
-        # 如果路径不存在，抛出错误
         raise FileNotFoundError(f"ASR输出路径不存在: {asr_output_path}")
     
-
     def _build_step_env(self, config: Dict[str, Any]) -> Dict[str, str]:
         """构建步骤执行环境变量"""
         env = os.environ.copy()
@@ -593,202 +914,278 @@ class TrainingService:
         })
         return env
     
-    def _update_progress(self, task_id: str, completed_step: TrainingStep):
-        """更新任务进度"""
-        if task_id not in tasks_db:
-            return
+    def _find_trained_models(self, character_name: str):
+        """查找训练生成的模型文件"""
+        training_info = training_db[character_name]
         
-        # 定义步骤顺序和权重（按实际执行顺序）
-        step_sequence = [
-            TrainingStep.CONVERT_AUDIO,
-            TrainingStep.SLICE_AUDIO,
-            TrainingStep.DENOISE_AUDIO,
-            TrainingStep.ASR_TRANSCRIBE,
-            TrainingStep.EXTRACT_TEXT_FEATURES,
-            TrainingStep.EXTRACT_AUDIO_FEATURES,
-            TrainingStep.EXTRACT_SPEAKER_VECTORS,
-            TrainingStep.EXTRACT_SEMANTIC_FEATURES,
-            TrainingStep.TRAIN_SOVITS,
-            TrainingStep.TRAIN_GPT,
-            TrainingStep.TEST_INFERENCE
-        ]
-        
-        # 定义步骤权重（基于实际复杂度和时间）
-        step_weights = {
-            TrainingStep.CONVERT_AUDIO: 3,        # 音频转换，相对简单
-            TrainingStep.SLICE_AUDIO: 5,          # 音频切片，中等复杂度
-            TrainingStep.DENOISE_AUDIO: 8,        # 音频降噪，较复杂
-            TrainingStep.ASR_TRANSCRIBE: 10,      # 语音识别，复杂
-            TrainingStep.EXTRACT_TEXT_FEATURES: 8, # 文本特征提取，中等复杂度
-            TrainingStep.EXTRACT_AUDIO_FEATURES: 12, # 音频特征提取，复杂
-            TrainingStep.EXTRACT_SPEAKER_VECTORS: 8, # 说话人向量提取，中等复杂度
-            TrainingStep.EXTRACT_SEMANTIC_FEATURES: 10, # 语义特征提取，复杂
-            TrainingStep.TRAIN_SOVITS: 20,        # SoVITS训练，最复杂
-            TrainingStep.TRAIN_GPT: 20,           # GPT训练，最复杂
-            TrainingStep.TEST_INFERENCE: 6        # 推理测试，中等复杂度
-        }
-        
-        # 计算已完成步骤的权重
-        total_weight = sum(step_weights.values())
-        completed_weight = 0
-        
-        for step in step_sequence:
-            if step == completed_step:
-                # 当前步骤完成，加上其权重
-                completed_weight += step_weights[step]
-                break
-            else:
-                # 之前步骤已完成，加上其权重
-                completed_weight += step_weights[step]
-        
-        # 更新进度
-        progress = min(100.0, (completed_weight / total_weight) * 100)
-        tasks_db[task_id].progress = progress
-        
-        logger.info(f"任务 {task_id} 进度更新: {completed_step.value} 完成，总进度: {progress:.1f}%")
+        try:
+            # 查找GPT模型
+            gpt_weights_dir = self.base_dir / "GPT_weights_v2ProPlus"
+            if gpt_weights_dir.exists():
+                gpt_files = list(gpt_weights_dir.glob("*.ckpt"))
+                if gpt_files:
+                    # 选择最新的GPT模型
+                    latest_gpt = max(gpt_files, key=lambda x: x.stat().st_mtime)
+                    training_info.gpt_model_path = str(latest_gpt)
+            
+            # 查找SoVITS模型
+            sovits_weights_dir = self.base_dir / "SoVITS_weights_v2ProPlus"
+            if sovits_weights_dir.exists():
+                sovits_files = list(sovits_weights_dir.glob("*.pth"))
+                if sovits_files:
+                    # 选择最新的SoVITS模型
+                    latest_sovits = max(sovits_files, key=lambda x: x.stat().st_mtime)
+                    training_info.sovits_model_path = str(latest_sovits)
+                    
+        except Exception as e:
+            logger.warning(f"查找训练模型失败 {character_name}: {e}")
     
-    def get_step_progress(self, task_id: str, current_step: TrainingStep) -> float:
-        """获取当前步骤的进度百分比"""
-        # 定义步骤顺序和权重（与_update_progress保持一致）
-        step_sequence = [
-            TrainingStep.CONVERT_AUDIO,
-            TrainingStep.SLICE_AUDIO,
-            TrainingStep.DENOISE_AUDIO,
-            TrainingStep.ASR_TRANSCRIBE,
-            TrainingStep.EXTRACT_TEXT_FEATURES,
-            TrainingStep.EXTRACT_AUDIO_FEATURES,
-            TrainingStep.EXTRACT_SPEAKER_VECTORS,
-            TrainingStep.EXTRACT_SEMANTIC_FEATURES,
-            TrainingStep.TRAIN_SOVITS,
-            TrainingStep.TRAIN_GPT,
-            TrainingStep.TEST_INFERENCE
-        ]
+    async def _build_inference_params(self, character_name: str, request: InferenceRequest) -> Dict[str, Any]:
+        """构建推理参数"""
+        training_info = training_db[character_name]
+        config = characters_db[character_name].config
         
-        step_weights = {
-            TrainingStep.CONVERT_AUDIO: 3,
-            TrainingStep.SLICE_AUDIO: 5,
-            TrainingStep.DENOISE_AUDIO: 8,
-            TrainingStep.ASR_TRANSCRIBE: 10,
-            TrainingStep.EXTRACT_TEXT_FEATURES: 8,
-            TrainingStep.EXTRACT_AUDIO_FEATURES: 12,
-            TrainingStep.EXTRACT_SPEAKER_VECTORS: 8,
-            TrainingStep.EXTRACT_SEMANTIC_FEATURES: 10,
-            TrainingStep.TRAIN_SOVITS: 20,
-            TrainingStep.TRAIN_GPT: 20,
-            TrainingStep.TEST_INFERENCE: 6
-        }
-        
-        # 计算当前步骤之前的累计权重
-        total_weight = sum(step_weights.values())
-        completed_weight = 0
-        
-        for step in step_sequence:
-            if step == current_step:
-                # 到达当前步骤，返回之前的累计进度
-                break
+        # 确定参考音频
+        ref_audio = request.ref_audio
+        if not ref_audio:
+            # 自动选择参考音频
+            if config.enable_denoise:
+                audio_dir = self.get_character_denoised_audio_dir(character_name)
             else:
-                completed_weight += step_weights[step]
+                audio_dir = self.get_character_sliced_audio_dir(character_name)
+            
+            audio_files = list(audio_dir.glob("*.wav"))
+            if audio_files:
+                ref_audio = str(audio_files[0])
+            else:
+                raise ValueError(f"找不到参考音频文件: {character_name}")
         
-        # 返回当前步骤之前的累计进度
-        return (completed_weight / total_weight) * 100
+        # 确定参考文本
+        ref_text = request.ref_text
+        if not ref_text:
+            # 从ASR输出中提取
+            transcripts_dir = self.get_character_transcripts_dir(character_name)
+            asr_output = self._find_asr_output_file(str(transcripts_dir))
+            
+            ref_audio_name = Path(ref_audio).stem
+            ref_text = self._extract_ref_text_from_asr(asr_output, ref_audio_name)
+        
+        # 构建输出路径
+        output_name = request.output_name or f"{character_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+        output_path = str(self.inference_output_dir / output_name)
+        
+        # 创建目标文本文件
+        target_text_file = self.inference_output_dir / f"target_text_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(target_text_file, 'w', encoding='utf-8') as f:
+            f.write(request.target_text)
+        
+        # 创建参考文本文件
+        ref_text_file = self.inference_output_dir / f"ref_text_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(ref_text_file, 'w', encoding='utf-8') as f:
+            f.write(ref_text)
+        
+        # 获取模型路径配置
+        model_paths = get_model_paths()
+        
+        return {
+            "gpt_model": training_info.gpt_model_path,
+            "sovits_model": training_info.sovits_model_path,
+            "ref_audio": ref_audio,
+            "ref_text": str(ref_text_file),
+            "ref_language": request.ref_language,
+            "target_text": str(target_text_file),
+            "target_language": request.target_language,
+            "output_path": output_path,
+            "bert_path": model_paths["bert_dir"],
+            "cnhubert_base_path": model_paths["cnhubert_dir"],
+            "gpu_number": config.gpu_id,
+            "is_half": True
+        }
+    
+    def _extract_ref_text_from_asr(self, asr_output: str, ref_audio_name: str) -> str:
+        """从ASR输出中提取参考文本"""
+        try:
+            with open(asr_output, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if ref_audio_name in line:
+                        if '|' in line:
+                            # .list格式
+                            parts = line.strip().split('|')
+                            if len(parts) >= 4:
+                                return parts[3]
+                        elif '\t' in line:
+                            # .tsv格式
+                            parts = line.strip().split('\t')
+                            if len(parts) >= 2:
+                                return parts[1]
+                        else:
+                            # 其他格式
+                            return line.strip()
+                            
+            return "这是一个参考音频的文本内容。"
+            
+        except Exception as e:
+            logger.warning(f"提取参考文本失败: {e}")
+            return "这是一个参考音频的文本内容。"
 
 # 初始化服务
-training_service = TrainingService()
+training_service = CharacterBasedTrainingService()
 
-# API路由
-@app.post("/api/v1/task/create", response_model=TaskInfo)
-async def create_task(request: TaskCreateRequest):
-    """创建新的训练任务"""
-    task_id = str(uuid.uuid4())
-    
-    # 创建任务信息
-    task_info = TaskInfo(
-        task_id=task_id,
-        task_name=request.task_name,
-        status=TaskStatus.CREATED,
-        config=request.config,
-        created_at=datetime.now(),
-        updated_at=datetime.now()
-    )
-    
-    # 保存任务
-    tasks_db[task_id] = task_info
-    
-    # 创建任务目录和配置文件
-    training_service.create_task_config_file(task_id, request.config)
-    
-    return task_info
+# ==================== API路由 ====================
 
-@app.get("/api/v1/task/{task_id}", response_model=TaskInfo)
-async def get_task(task_id: str):
-    """获取任务信息"""
-    if task_id not in tasks_db:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    return tasks_db[task_id]
+# 角色管理API
+@app.post("/api/v1/characters", response_model=CharacterInfo)
+async def create_character(request: CharacterCreateRequest):
+    """创建角色"""
+    try:
+        character_info = training_service.create_character(request.character_name, request.config)
+        return character_info
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/api/v1/tasks", response_model=List[TaskInfo])
-async def list_tasks():
-    """列出所有任务"""
-    return list(tasks_db.values())
+@app.get("/api/v1/characters", response_model=List[CharacterInfo])
+async def list_characters():
+    """列出所有角色"""
+    return training_service.list_characters()
 
-@app.post("/api/v1/task/{task_id}/step/{step}")
-async def execute_step(task_id: str, step: TrainingStep, request: StepExecuteRequest, background_tasks: BackgroundTasks):
-    """执行训练步骤"""
-    background_tasks.add_task(training_service.execute_step, task_id, step, request.params)
-    return {"message": f"步骤 {step} 开始执行", "task_id": task_id}
+@app.get("/api/v1/characters/{character_name}", response_model=CharacterInfo)
+async def get_character(character_name: str):
+    """获取角色信息"""
+    try:
+        return training_service.get_character(character_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
-@app.post("/api/v1/task/{task_id}/cancel")
-async def cancel_task(task_id: str):
-    """取消任务"""
-    if task_id not in tasks_db:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    
-    # 终止正在运行的进程
-    if task_id in step_processes:
-        process = step_processes[task_id]
-        process.terminate()
-        del step_processes[task_id]
-    
-    # 更新任务状态
-    tasks_db[task_id].status = TaskStatus.CANCELLED
-    tasks_db[task_id].updated_at = datetime.now()
-    
-    return {"message": "任务已取消"}
+@app.put("/api/v1/characters/{character_name}", response_model=CharacterInfo)
+async def rename_character(character_name: str, request: CharacterRenameRequest):
+    """重命名角色"""
+    try:
+        return training_service.rename_character(character_name, request.new_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/api/v1/task/{task_id}/files/upload")
-async def upload_file(task_id: str, file: UploadFile = File(...)):
-    """上传训练音频文件"""
-    if task_id not in tasks_db:
-        raise HTTPException(status_code=404, detail="任务不存在")
+@app.delete("/api/v1/characters/{character_name}")
+async def delete_character(character_name: str):
+    """删除角色"""
+    try:
+        success = training_service.delete_character(character_name)
+        return {"message": "角色删除成功", "success": success}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/api/v1/characters/{character_name}/set_default")
+async def set_default_character(character_name: str):
+    """设置默认角色"""
+    try:
+        success = training_service.set_default_character(character_name)
+        return {"message": "默认角色设置成功", "success": success}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/api/v1/default_character")
+async def get_default_character():
+    """获取默认角色"""
+    default_char = training_service.get_default_character()
+    return {"default_character": default_char}
+
+# 音频上传API
+@app.post("/api/v1/characters/{character_name}/audio/upload")
+async def upload_audio(character_name: str, file: UploadFile = File(...)):
+    """上传音频文件"""
+    try:
+        character_info = training_service.get_character(character_name)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="角色不存在")
     
-    # 获取任务输入目录
-    input_dir = training_service.get_task_input_dir(task_id)
-    file_path = input_dir / file.filename
+    # 获取角色音频目录
+    audio_dir = training_service.get_character_raw_audio_dir(character_name)
+    file_path = audio_dir / file.filename
     
     # 保存文件
     with open(file_path, "wb") as f:
         content = await file.read()
         f.write(content)
     
-    return {"message": "文件上传成功", "filename": file.filename, "path": str(file_path)}
+    # 更新音频数量
+    training_service.update_character_audio_count(character_name)
+    
+    return {"message": "音频上传成功", "filename": file.filename, "path": str(file_path)}
 
-@app.get("/api/v1/task/{task_id}/files/download/{filename}")
-async def download_file(task_id: str, filename: str):
-    """下载训练结果文件"""
-    if task_id not in tasks_db:
-        raise HTTPException(status_code=404, detail="任务不存在")
+# 音频处理API
+@app.post("/api/v1/characters/{character_name}/audio/process", response_model=AudioProcessingInfo)
+async def start_audio_processing(character_name: str, background_tasks: BackgroundTasks):
+    """开始音频处理"""
+    try:
+        processing_info = await training_service.start_audio_processing(character_name)
+        return processing_info
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/v1/characters/{character_name}/audio/status", response_model=AudioProcessingInfo)
+async def get_audio_processing_status(character_name: str):
+    """获取音频处理状态"""
+    if character_name not in audio_processing_db:
+        raise HTTPException(status_code=404, detail="音频处理记录不存在")
+    return audio_processing_db[character_name]
+
+# 训练API
+@app.post("/api/v1/characters/{character_name}/training/start", response_model=TrainingInfo)
+async def start_training(character_name: str, background_tasks: BackgroundTasks):
+    """开始训练"""
+    try:
+        training_info = await training_service.start_training(character_name)
+        return training_info
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/v1/characters/{character_name}/training/status", response_model=TrainingInfo)
+async def get_training_status(character_name: str):
+    """获取训练状态"""
+    if character_name not in training_db:
+        raise HTTPException(status_code=404, detail="训练记录不存在")
+    return training_db[character_name]
+
+# 推理API
+@app.post("/api/v1/inference", response_model=InferenceInfo)
+async def start_inference(request: InferenceRequest, background_tasks: BackgroundTasks):
+    """开始推理"""
+    try:
+        inference_info = await training_service.start_inference(request)
+        return inference_info
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/v1/inference/{inference_id}", response_model=InferenceInfo)
+async def get_inference_status(inference_id: str):
+    """获取推理状态"""
+    if inference_id not in inference_db:
+        raise HTTPException(status_code=404, detail="推理记录不存在")
+    return inference_db[inference_id]
+
+@app.get("/api/v1/inference")
+async def list_inference():
+    """列出所有推理记录"""
+    return list(inference_db.values())
+
+# 文件下载API
+@app.get("/api/v1/characters/{character_name}/download/{filename}")
+async def download_character_file(character_name: str, filename: str):
+    """下载角色相关文件"""
+    try:
+        character_info = training_service.get_character(character_name)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="角色不存在")
     
     # 查找文件
-    task_dir = training_service.get_task_dir(task_id)
-    file_path = None
-    
-    # 在各个可能的目录中查找文件
+    character_dir = training_service.get_character_dir(character_name)
     search_dirs = [
-        task_dir / "output",
-        task_dir / "experiments" / tasks_db[task_id].config.exp_name,
-        task_dir
+        character_dir / "models",
+        character_dir / "experiments" / character_name,
+        character_dir,
+        training_service.inference_output_dir
     ]
     
+    file_path = None
     for search_dir in search_dirs:
         candidate_path = search_dir / filename
         if candidate_path.exists():
@@ -800,49 +1197,36 @@ async def download_file(task_id: str, filename: str):
     
     return FileResponse(file_path, filename=filename)
 
-@app.get("/api/v1/task/{task_id}/logs")
-async def get_task_logs(task_id: str):
-    """获取任务日志"""
-    if task_id not in tasks_db:
-        raise HTTPException(status_code=404, detail="任务不存在")
+@app.get("/api/v1/inference/{inference_id}/download")
+async def download_inference_result(inference_id: str):
+    """下载推理结果"""
+    if inference_id not in inference_db:
+        raise HTTPException(status_code=404, detail="推理记录不存在")
     
-    # 读取日志文件
-    log_file = training_service.get_task_dir(task_id) / "training.log"
-    if log_file.exists():
-        with open(log_file, 'r', encoding='utf-8') as f:
-            logs = f.read()
-        return {"logs": logs}
-    else:
-        return {"logs": "暂无日志"}
-
-@app.delete("/api/v1/task/{task_id}")
-async def delete_task(task_id: str):
-    """删除任务"""
-    if task_id not in tasks_db:
-        raise HTTPException(status_code=404, detail="任务不存在")
+    inference_info = inference_db[inference_id]
     
-    # 取消正在运行的任务
-    if tasks_db[task_id].status == TaskStatus.RUNNING:
-        await cancel_task(task_id)
+    if inference_info.status != ProcessingStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="推理尚未完成")
     
-    # 删除任务目录
-    import shutil
-    task_dir = training_service.get_task_dir(task_id)
-    if task_dir.exists():
-        shutil.rmtree(task_dir)
+    if not inference_info.output_path or not Path(inference_info.output_path).exists():
+        raise HTTPException(status_code=404, detail="推理结果文件不存在")
     
-    # 从数据库中删除
-    del tasks_db[task_id]
-    
-    return {"message": "任务已删除"}
+    filename = f"{inference_info.character_name}_{inference_id[:8]}.wav"
+    return FileResponse(inference_info.output_path, filename=filename)
 
 @app.get("/")
 async def root():
     """根路径"""
     return {
-        "message": "GPT-SoVITS训练服务API",
-        "version": "1.0.0",
-        "docs_url": "/docs"
+        "message": "GPT-SoVITS 基于角色的训练服务API",
+        "version": "2.0.0",
+        "docs_url": "/docs",
+        "features": [
+            "角色管理",
+            "音频处理",
+            "模型训练", 
+            "语音推理"
+        ]
     }
 
 def parse_arguments():
