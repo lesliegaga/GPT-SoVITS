@@ -316,8 +316,20 @@ class StepProcessor:
             if kwargs.get('is_half', False):
                 cmd.append('--is_half')
             
+            logger.info("开始执行推理命令:")
+            logger.info(f"命令: {' '.join(cmd)}")
+            logger.info(f"工作目录: {self.base_dir}")
+            
+            # 验证关键文件存在
+            for key in ['gpt_model', 'sovits_model', 'ref_audio', 'ref_text', 'target_text']:
+                file_path = kwargs.get(key, '')
+                if file_path and not os.path.exists(file_path):
+                    logger.error(f"关键文件不存在: {key} = {file_path}")
+                    return False
+            
             # 确保子进程继承父进程的环境变量，特别是CUDA_VISIBLE_DEVICES
             env = os.environ.copy()
+            logger.info(f"环境变量 CUDA_VISIBLE_DEVICES: {env.get('CUDA_VISIBLE_DEVICES', 'Not Set')}")
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -329,15 +341,39 @@ class StepProcessor:
             
             stdout, stderr = await process.communicate()
             
+            stdout_text = stdout.decode('utf-8') if stdout else ""
+            stderr_text = stderr.decode('utf-8') if stderr else ""
+            
+            logger.info(f"推理进程返回码: {process.returncode}")
+            if stdout_text:
+                logger.info(f"推理输出:\n{stdout_text}")
+            if stderr_text:
+                logger.warning(f"推理错误输出:\n{stderr_text}")
+            
             if process.returncode == 0:
-                logger.info("推理测试完成")
-                return True
+                # 验证输出文件是否生成
+                output_path = kwargs.get('output_path', '')
+                if output_path:
+                    output_file = os.path.join(output_path, 'output.wav')
+                    if os.path.exists(output_file):
+                        file_size = os.path.getsize(output_file)
+                        logger.info(f"✅ 推理测试完成，输出文件: {output_file}, 大小: {file_size} bytes")
+                        return True
+                    else:
+                        logger.error(f"❌ 推理命令成功但未生成输出文件: {output_file}")
+                        return False
+                else:
+                    logger.info("✅ 推理测试完成")
+                    return True
             else:
-                logger.error(f"推理测试失败: {stderr.decode()}")
+                logger.error(f"❌ 推理测试失败，返回码: {process.returncode}")
+                logger.error(f"错误输出: {stderr_text}")
                 return False
                 
         except Exception as e:
-            logger.error(f"推理测试异常: {str(e)}")
+            logger.error(f"❌ 推理测试异常: {str(e)}")
+            import traceback
+            logger.error(f"异常堆栈: {traceback.format_exc()}")
             return False
 
 class ConfigGenerator:
