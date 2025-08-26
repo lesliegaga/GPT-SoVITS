@@ -47,6 +47,70 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def check_and_fix_nltk_cmudict():
+    """检查并修复NLTK CMU词典数据包"""
+    try:
+        import nltk
+        
+        # 尝试直接查找CMU词典
+        try:
+            nltk.data.find('corpora/cmudict.zip')
+            logger.info("✅ NLTK CMU词典检查通过")
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️ NLTK CMU词典检查失败: {e}")
+        
+        # 尝试测试g2p_en模块
+        try:
+            from g2p_en import G2p
+            g2p = G2p()
+            g2p("test")  # 简单测试
+            logger.info("✅ g2p_en模块测试通过")
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️ g2p_en模块测试失败: {e}")
+        
+        # 如果检查失败，尝试修复
+        logger.info("🔧 开始修复NLTK CMU词典...")
+        
+        # 查找并备份损坏的文件
+        for data_path in nltk.data.path:
+            cmudict_path = Path(data_path) / "corpora" / "cmudict.zip"
+            if cmudict_path.exists():
+                try:
+                    # 尝试打开文件检查是否损坏
+                    import zipfile
+                    with zipfile.ZipFile(cmudict_path, 'r') as zf:
+                        zf.testzip()
+                    logger.info(f"✅ CMU词典文件完好: {cmudict_path}")
+                except Exception:
+                    # 文件损坏，进行备份
+                    backup_path = cmudict_path.with_suffix('.zip.backup')
+                    logger.info(f"🔄 备份损坏文件: {cmudict_path} -> {backup_path}")
+                    shutil.move(cmudict_path, backup_path)
+        
+        # 重新下载CMU词典
+        logger.info("📥 重新下载NLTK CMU词典...")
+        nltk.download('cmudict', force=True, quiet=True)
+        
+        # 再次测试
+        try:
+            from g2p_en import G2p
+            g2p = G2p()
+            g2p("test")
+            logger.info("✅ NLTK CMU词典修复成功")
+            return True
+        except Exception as e:
+            logger.error(f"❌ NLTK CMU词典修复失败: {e}")
+            return False
+            
+    except ImportError:
+        logger.warning("⚠️ NLTK未安装，跳过检查")
+        return True
+    except Exception as e:
+        logger.error(f"❌ NLTK检查异常: {e}")
+        return False
+
 # 处理状态枚举
 class ProcessingStatus(str, Enum):
     PENDING = "pending"      # 等待处理
@@ -187,6 +251,10 @@ class CharacterBasedTrainingService:
         # 创建推理输出目录
         self.inference_output_dir = self.work_dir / "inference_output"
         self.inference_output_dir.mkdir(exist_ok=True)
+        
+        # 检查并修复NLTK CMU词典
+        logger.info("🔍 检查NLTK CMU词典...")
+        check_and_fix_nltk_cmudict()
         
         # 加载现有角色和默认角色设置
         self._load_existing_characters()
@@ -730,6 +798,10 @@ class CharacterBasedTrainingService:
         character_name = inference_info.character_name
         
         try:
+            # 推理前再次检查NLTK CMU词典（防止运行时问题）
+            if not check_and_fix_nltk_cmudict():
+                raise ValueError("NLTK CMU词典检查失败，无法进行推理")
+            
             # 构建推理参数
             inference_params = await self._build_inference_params(character_name, request)
             
