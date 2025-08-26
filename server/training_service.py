@@ -737,8 +737,12 @@ class CharacterBasedTrainingService:
             if success:
                 inference_info.status = ProcessingStatus.COMPLETED
                 inference_info.completed_at = datetime.now()
-                inference_info.output_path = inference_params.get("output_path")
+                # 输出路径应该是包含output.wav的完整文件路径
+                output_dir = inference_params.get("output_path")
+                output_file = Path(output_dir) / "output.wav"
+                inference_info.output_path = str(output_file)
                 logger.info(f"✅ 推理完成: {inference_id}")
+                logger.info(f"   输出文件: {inference_info.output_path}")
             else:
                 inference_info.status = ProcessingStatus.FAILED
                 inference_info.error_message = "推理执行失败"
@@ -970,9 +974,14 @@ class CharacterBasedTrainingService:
             ref_audio_name = Path(ref_audio).stem
             ref_text = self._extract_ref_text_from_asr(asr_output, ref_audio_name)
         
-        # 构建输出路径
-        output_name = request.output_name or f"{character_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
-        output_path = str(self.inference_output_dir / output_name)
+        # 构建输出路径 - 创建唯一的输出目录
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_dir_name = f"{character_name}_{timestamp}"
+        output_dir = self.inference_output_dir / output_dir_name
+        output_dir.mkdir(exist_ok=True)
+        
+        # 设置输出路径为目录，inference_cli.py会在其中创建output.wav
+        output_path = str(output_dir)
         
         # 创建目标文本文件
         target_text_file = self.inference_output_dir / f"target_text_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
