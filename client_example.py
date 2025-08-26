@@ -137,9 +137,9 @@ def example_full_training():
     task_config = {
         "exp_name": "demo_speaker",
         "language": "zh",
-        "batch_size": 8,  # 小批次用于快速测试
-        "epochs_s2": 20,  # 减少训练轮数
-        "epochs_s1": 8,
+        "batch_size": 16,  # 与test_demo.sh保持一致
+        "epochs_s2": 50,   # 与test_demo.sh保持一致
+        "epochs_s1": 15,   # 与test_demo.sh保持一致
         "gpu_id": "0"
     }
     
