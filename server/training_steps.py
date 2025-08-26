@@ -14,9 +14,11 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 import logging
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
+# 获取日志记录器（继承父级配置）
 logger = logging.getLogger(__name__)
+
+# 确保日志级别为INFO，以便显示调试信息
+logger.setLevel(logging.INFO)
 
 class StepProcessor:
     """训练步骤处理器"""
