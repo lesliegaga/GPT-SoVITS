@@ -485,14 +485,19 @@ class TrainingService:
                 with open(ref_text_file, 'w', encoding='utf-8') as f:
                     f.write(ref_text)
                 
-                # 5. 构建完整的推理参数
+                # 5. 确保输出目录存在
+                output_dir = Path(config["WORK_DIR"]) / "output"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"创建输出目录: {output_dir}")
+                
+                # 6. 构建完整的推理参数
                 inference_params.update({
                     "gpt_model": gpt_model,
                     "sovits_model": sovits_model,
                     "ref_audio": ref_audio,
                     "ref_text": str(ref_text_file),
                     "target_text": str(target_text_file),
-                    "output_path": config["WORK_DIR"] + "/output",
+                    "output_path": str(output_dir),
                     "bert_path": config["BERT_DIR"],
                     "cnhubert_base_path": config["CNHUBERT_DIR"],
                     "gpu_number": config["GPU_ID"],
