@@ -345,6 +345,24 @@ class ConfigGenerator:
     def generate_s2_config(self, task_config: Dict[str, Any], output_path: str) -> bool:
         """生成SoVITS训练配置，与generate_s2_config.py逻辑完全一致"""
         try:
+            import sys
+            
+            # 添加项目根路径到Python路径，以便导入config模块
+            if str(self.base_dir) not in sys.path:
+                sys.path.insert(0, str(self.base_dir))
+            
+            try:
+                from config import SoVITS_weight_version2root, exp_root
+            except ImportError:
+                # 如果无法导入，使用默认值
+                logger.warning("无法导入config模块，使用默认配置")
+                SoVITS_weight_version2root = {
+                    "v1": "SoVITS_weights/",
+                    "v2": "SoVITS_weights_v2/",
+                    "v2Pro": "SoVITS_weights_v2Pro/",
+                    "v2ProPlus": "SoVITS_weights_v2ProPlus/"
+                }
+            
             # 按照webui.py的逻辑选择基础配置文件
             version = task_config.get("VERSION", "v2ProPlus")
             config_file = (
@@ -382,6 +400,7 @@ class ConfigGenerator:
             data["train"]["lora_rank"] = task_config.get("LORA_RANK", 32)
             data["model"]["version"] = version
             data["data"]["exp_dir"] = data["s2_ckpt_dir"] = s2_dir
+            data["save_weight_dir"] = SoVITS_weight_version2root.get(version, "SoVITS_weights_v2ProPlus/")  # 添加权重保存目录
             data["name"] = task_config["EXP_NAME"]
             data["version"] = version
             
@@ -399,6 +418,22 @@ class ConfigGenerator:
         """生成GPT训练配置，与generate_s1_config.py逻辑完全一致"""
         try:
             import yaml
+            import sys
+            
+            # 添加项目根路径到Python路径，以便导入config模块
+            if str(self.base_dir) not in sys.path:
+                sys.path.insert(0, str(self.base_dir))
+            
+            try:
+                from config import GPT_weight_version2root, exp_root
+            except ImportError:
+                # 如果无法导入，使用默认值
+                logger.warning("无法导入config模块，使用默认配置")
+                GPT_weight_version2root = {
+                    "v1": "GPT_weights/",
+                    "v2": "GPT_weights_v2/",
+                    "v2ProPlus": "GPT_weights_v2ProPlus/"
+                }
             
             # 按照webui.py的逻辑选择基础配置文件
             version = task_config.get("VERSION", "v2ProPlus")
@@ -430,6 +465,7 @@ class ConfigGenerator:
             data["train"]["if_save_every_weights"] = task_config.get("IF_SAVE_EVERY_WEIGHTS", True)
             data["train"]["if_save_latest"] = task_config.get("IF_SAVE_LATEST", True)
             data["train"]["if_dpo"] = task_config.get("IF_DPO", False)
+            data["train"]["half_weights_save_dir"] = GPT_weight_version2root.get(version, "GPT_weights_v2ProPlus/")  # 关键：添加缺失的字段
             data["train"]["exp_name"] = task_config["EXP_NAME"]
             data["train_semantic_path"] = "%s/6-name2semantic.tsv" % s1_dir
             data["train_phoneme_path"] = "%s/2-name2text.txt" % s1_dir
