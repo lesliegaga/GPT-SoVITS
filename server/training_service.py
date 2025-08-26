@@ -1110,7 +1110,7 @@ class CharacterBasedTrainingService:
             "output_path": output_path,
             "bert_path": model_paths["bert_dir"],
             "cnhubert_base_path": model_paths["cnhubert_dir"],
-            "gpu_number": gpu_number,
+            "gpu_number": config.gpu_id,
             "is_half": True
         }
     
