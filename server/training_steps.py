@@ -432,8 +432,31 @@ class ConfigGenerator:
             data["train"]["batch_size"] = batch_size
             data["train"]["epochs"] = task_config["EPOCHS_S2"]
             data["train"]["text_low_lr_rate"] = task_config.get("TEXT_LOW_LR_RATE", 0.4)
-            data["train"]["pretrained_s2G"] = task_config.get("PRETRAINED_S2G", "")
-            data["train"]["pretrained_s2D"] = task_config.get("PRETRAINED_S2D", "")
+            # 如果没有指定pretrained_s2G，从config.py中读取（与webui.py逻辑一致）
+            if not task_config.get("pretrained_s2G") or task_config.get("pretrained_s2G") == "":
+                from config import pretrained_sovits_name
+                if version in pretrained_sovits_name and pretrained_sovits_name[version]:
+                    pretrained_s2G = pretrained_sovits_name[version]
+                    logger.info(f"从config.py读取{version}版本的SoVITS-G预训练模型: {pretrained_s2G}")
+                else:
+                    raise ValueError(f"警告: 在config.py中找不到{version}版本的SoVITS-D预训练模型")
+
+            else:
+                pretrained_s2G = task_config["pretrained_s2G"]
+            
+            # 如果没有指定pretrained_s2D，从config.py中读取（与webui.py逻辑一致）
+            if not task_config.get("pretrained_s2D") or task_config.get("pretrained_s2D") == "":
+                from config import pretrained_sovits_name
+                if version in pretrained_sovits_name and pretrained_sovits_name[version]:
+                    pretrained_s2D = pretrained_sovits_name[version].replace("s2G", "s2D")
+                    logger.info(f"从config.py读取{version}版本的SoVITS-D预训练模型: {pretrained_s2D}")
+                else:
+                    raise ValueError(f"警告: 在config.py中找不到{version}版本的SoVITS-D预训练模型")
+            else:
+                pretrained_s2D = task_config["pretrained_s2D"]
+            
+            data["train"]["pretrained_s2G"] = pretrained_s2G
+            data["train"]["pretrained_s2D"] = pretrained_s2D
             data["train"]["if_save_latest"] = task_config.get("IF_SAVE_LATEST", True)
             data["train"]["if_save_every_weights"] = task_config.get("IF_SAVE_EVERY_WEIGHTS", True)
             data["train"]["save_every_epoch"] = task_config.get("SAVE_EVERY_EPOCH_S2", 4)
@@ -502,7 +525,19 @@ class ConfigGenerator:
             # 设置训练参数（与generate_s1_config.py完全一致）
             data["train"]["batch_size"] = batch_size
             data["train"]["epochs"] = task_config["EPOCHS_S1"]
-            data["pretrained_s1"] = task_config.get("PRETRAINED_S1", "")
+            
+            # 如果没有指定pretrained_s1，从config.py中读取（与webui.py逻辑一致）
+            if not task_config.get("pretrained_s1") or task_config.get("pretrained_s1") == "":
+                from config import pretrained_gpt_name
+                if version in pretrained_gpt_name and pretrained_gpt_name[version]:
+                    pretrained_s1 = pretrained_gpt_name[version]
+                    logger.info(f"从config.py读取{version}版本的GPT预训练模型: {pretrained_s1}")
+                else:
+                    raise ValueError(f"警告: 在config.py中找不到{version}版本的GPT预训练模型")
+            else:
+                pretrained_s1 = task_config["pretrained_s1"]
+            
+            data["pretrained_s1"] = pretrained_s1
             data["train"]["save_every_n_epoch"] = task_config.get("SAVE_EVERY_EPOCH_S1", 5)
             data["train"]["if_save_every_weights"] = task_config.get("IF_SAVE_EVERY_WEIGHTS", True)
             data["train"]["if_save_latest"] = task_config.get("IF_SAVE_LATEST", True)

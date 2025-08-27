@@ -1133,7 +1133,9 @@ class CharacterBasedTrainingService:
             "BATCH_SIZE": str(config["BATCH_SIZE"]),
             "EPOCHS_S2": str(config["EPOCHS_S2"]),
             "S2_VERSION": "v2ProPlus",
-            "_CUDA_VISIBLE_DEVICES": config["GPU_ID"]
+            "_CUDA_VISIBLE_DEVICES": config["GPU_ID"],
+            # 添加其他必要的环境变量
+            "hz": "25hz"
         })
         return env
     
