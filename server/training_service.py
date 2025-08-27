@@ -407,10 +407,13 @@ class CharacterBasedTrainingService:
         if character_name not in characters_db:
             raise ValueError(f"角色不存在: {character_name}")
         
-        # 删除目录
+        # 删除角色目录
         character_dir = self.get_character_dir(character_name)
         if character_dir.exists():
             shutil.rmtree(character_dir)
+        
+        # 清理公共目录下的模型文件
+        self._clean_character_models_from_public_dirs(character_name)
         
         # 删除数据库记录
         del characters_db[character_name]
@@ -439,6 +442,30 @@ class CharacterBasedTrainingService:
         
         logger.info(f"✅ 角色删除成功: {character_name}")
         return True
+    
+    def _clean_character_models_from_public_dirs(self, character_name: str):
+        """清理公共目录下的角色模型文件"""
+        try:
+            # 清理所有版本的权重目录
+            for version in ["v1", "v2", "v2Pro", "v2ProPlus", "v3", "v4"]:
+                # 清理GPT权重
+                gpt_weights_dir = self.base_dir / f"GPT_weights_{version}"
+                if gpt_weights_dir.exists():
+                    for gpt_file in gpt_weights_dir.glob(f"{character_name}*.ckpt"):
+                        logger.info(f"🧹 删除公共目录下的GPT权重文件: {gpt_file}")
+                        gpt_file.unlink()
+                
+                # 清理SoVITS权重
+                sovits_weights_dir = self.base_dir / f"SoVITS_weights_{version}"
+                if sovits_weights_dir.exists():
+                    for sovits_file in sovits_weights_dir.glob(f"{character_name}*.pth"):
+                        logger.info(f"🧹 删除公共目录下的SoVITS权重文件: {sovits_file}")
+                        sovits_file.unlink()
+            
+            logger.info(f"✅ 角色 {character_name} 的公共模型文件清理完成")
+            
+        except Exception as e:
+            logger.warning(f"清理公共目录下的模型文件失败: {e}")
     
     def set_default_character(self, character_name: str) -> bool:
         """设置默认角色"""
@@ -647,6 +674,84 @@ class CharacterBasedTrainingService:
     
     # ==================== 训练管理 ====================
     
+    def _clean_training_artifacts(self, character_name: str, step: TrainingStep, version: str = "v2ProPlus"):
+        """智能清理训练产物，根据训练步骤选择性清理"""
+        try:
+            exp_dir = self.get_character_experiments_dir(character_name)
+            
+            if step == TrainingStep.TRAIN_SOVITS:
+                # SoVITS训练前：清理SoVITS相关目录，保留GPT相关
+                s2_logs_dir = exp_dir / f"logs_s2_{version}"
+                if s2_logs_dir.exists():
+                    logger.info(f"🧹 清理SoVITS训练目录: {s2_logs_dir}")
+                    shutil.rmtree(s2_logs_dir)
+                
+                # 清理SoVITS权重文件
+                self._clean_sovits_weights(character_name, version)
+                
+            elif step == TrainingStep.TRAIN_GPT:
+                # GPT训练前：清理GPT相关目录，保留SoVITS相关
+                s1_logs_dir = exp_dir / f"logs_s1_{version}"
+                if s1_logs_dir.exists():
+                    logger.info(f"🧹 清理GPT训练目录: {s1_logs_dir}")
+                    shutil.rmtree(s1_logs_dir)
+                
+                # 清理GPT权重文件
+                self._clean_gpt_weights(character_name, version)
+            
+            logger.info(f"✅ 角色 {character_name} 的训练产物清理完成 (步骤: {step.value})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 清理训练产物失败 {character_name}: {e}")
+            return False
+    
+
+    
+    def _clean_sovits_weights(self, character_name: str, version: str):
+        """清理SoVITS权重文件"""
+        try:
+            # 清理指定版本的SoVITS权重目录
+            sovits_weights_dir = self.base_dir / f"SoVITS_weights_{version}"
+            if sovits_weights_dir.exists():
+                for sovits_file in sovits_weights_dir.glob(f"{character_name}*.pth"):
+                    logger.info(f"🧹 删除SoVITS权重文件: {sovits_file}")
+                    sovits_file.unlink()
+            
+            # 清理其他版本的SoVITS权重目录
+            for other_version in ["v1", "v2", "v2Pro", "v3", "v4"]:
+                if other_version != version:
+                    other_sovits_dir = self.base_dir / f"SoVITS_weights_{other_version}"
+                    if other_sovits_dir.exists():
+                        for sovits_file in other_sovits_dir.glob(f"{character_name}*.pth"):
+                            logger.info(f"🧹 删除{other_version}版本SoVITS权重文件: {sovits_file}")
+                            sovits_file.unlink()
+                            
+        except Exception as e:
+            logger.warning(f"清理SoVITS权重文件失败: {e}")
+    
+    def _clean_gpt_weights(self, character_name: str, version: str):
+        """清理GPT权重文件"""
+        try:
+            # 清理指定版本的GPT权重目录
+            gpt_weights_dir = self.base_dir / f"GPT_weights_{version}"
+            if gpt_weights_dir.exists():
+                for gpt_file in gpt_weights_dir.glob(f"{character_name}*.ckpt"):
+                    logger.info(f"🧹 删除GPT权重文件: {gpt_file}")
+                    gpt_file.unlink()
+            
+            # 清理其他版本的GPT权重目录
+            for other_version in ["v1", "v2", "v2Pro", "v3", "v4"]:
+                if other_version != version:
+                    other_gpt_dir = self.base_dir / f"GPT_weights_{other_version}"
+                    if other_gpt_dir.exists():
+                        for gpt_file in other_gpt_dir.glob(f"{character_name}*.ckpt"):
+                            logger.info(f"🧹 删除{other_version}版本GPT权重文件: {gpt_file}")
+                            gpt_file.unlink()
+                            
+        except Exception as e:
+            logger.warning(f"清理GPT权重文件失败: {e}")
+    
     async def start_training(self, character_name: str, steps: List[TrainingStep] = None) -> TrainingInfo:
         """开始训练"""
         if character_name not in characters_db:
@@ -655,6 +760,9 @@ class CharacterBasedTrainingService:
         # 检查音频处理是否完成
         if characters_db[character_name].audio_processing_status != ProcessingStatus.COMPLETED:
             raise ValueError(f"角色 {character_name} 的音频处理尚未完成，无法开始训练")
+        
+        # 注意：不在开始训练时清理，而是在每个具体步骤前智能清理
+        logger.info(f"🚀 开始角色 {character_name} 的训练流程")
         
         if steps is None:
             steps = [
@@ -779,11 +887,17 @@ class CharacterBasedTrainingService:
                 return success
                 
             elif step == TrainingStep.TRAIN_SOVITS:
+                # SoVITS训练前：智能清理SoVITS相关文件，保留GPT相关
+                self._clean_training_artifacts(character_name, step, config["VERSION"])
+                
                 s2_config_path = str(self.get_character_dir(character_name) / "config_s2.json")
                 self.config_generator.generate_s2_config(config, s2_config_path)
                 return await self.step_processor.train_model("s2_train.py", s2_config_path)
                 
             elif step == TrainingStep.TRAIN_GPT:
+                # GPT训练前：智能清理GPT相关文件，保留SoVITS相关
+                self._clean_training_artifacts(character_name, step, config["VERSION"])
+                
                 s1_config_path = str(self.get_character_dir(character_name) / "config_s1.yaml")
                 self.config_generator.generate_s1_config(config, s1_config_path)
                 env_vars = {"hz": "25hz"}
@@ -1385,6 +1499,23 @@ async def get_training_status(character_name: str):
     if character_name not in training_db:
         raise HTTPException(status_code=404, detail="训练记录不存在")
     return training_db[character_name]
+
+@app.post("/api/v1/characters/{character_name}/training/clean")
+async def clean_training_models(character_name: str):
+    """清理角色的训练模型和checkpoint文件"""
+    try:
+        # 清理所有训练产物（包括SoVITS和GPT）
+        success = training_service._clean_training_artifacts(character_name, TrainingStep.TRAIN_SOVITS, "v2ProPlus")
+        if success:
+            # 也清理GPT相关
+            training_service._clean_training_artifacts(character_name, TrainingStep.TRAIN_GPT, "v2ProPlus")
+            return {"message": "训练产物清理成功", "success": True}
+        else:
+            raise HTTPException(status_code=500, detail="训练产物清理失败")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"清理过程中发生错误: {str(e)}")
 
 # 推理API
 @app.post("/api/v1/inference", response_model=InferenceInfo)
