@@ -151,6 +151,7 @@ class ProcessingStatus(str, Enum):
     COMPLETED = "completed"  # 处理完成
     FAILED = "failed"        # 处理失败
     CANCELLED = "cancelled"  # 已取消
+    OUTDATED = "outdated"    # 已过期（文件列表已变更）
 
 # 音频处理步骤枚举
 class AudioProcessingStep(str, Enum):
@@ -250,6 +251,15 @@ class InferenceInfo(BaseModel):
 # 步骤执行请求模型
 class StepExecuteRequest(BaseModel):
     params: Optional[Dict[str, Any]] = Field(default_factory=dict, description="步骤特定参数")
+
+# 音频文件信息模型
+class AudioFileInfo(BaseModel):
+    filename: str = Field(description="文件名")
+    file_path: str = Field(description="文件路径")
+    file_size: int = Field(description="文件大小（字节）")
+    created_at: datetime = Field(description="创建时间")
+    modified_at: datetime = Field(description="修改时间")
+    duration: Optional[float] = Field(default=None, description="音频时长（秒）")
 
 # 全局数据存储
 characters_db: Dict[str, CharacterInfo] = {}
@@ -671,6 +681,177 @@ class CharacterBasedTrainingService:
             
         audio_files = list(audio_dir.glob("*.wav"))
         return len(audio_files)
+    
+    def check_audio_processing_status_from_files(self, character_name: str) -> ProcessingStatus:
+        """基于持久化文件检查音频处理状态"""
+        if character_name not in characters_db:
+            raise ValueError(f"角色不存在: {character_name}")
+        
+        config = characters_db[character_name].config
+        
+        # 检查原始音频文件是否存在
+        raw_audio_dir = self.get_character_raw_audio_dir(character_name)
+        if not raw_audio_dir.exists() or self.get_audio_count(character_name) == 0:
+            return ProcessingStatus.PENDING
+        
+        # 检查转换后的音频
+        converted_dir = self.get_character_converted_audio_dir(character_name)
+        if not converted_dir.exists() or len(list(converted_dir.glob("*.wav"))) == 0:
+            return ProcessingStatus.PENDING
+        
+        # 检查切片音频
+        sliced_dir = self.get_character_sliced_audio_dir(character_name)
+        if not sliced_dir.exists() or len(list(sliced_dir.glob("*.wav"))) == 0:
+            return ProcessingStatus.PENDING
+        
+        # 如果启用降噪，检查降噪音频
+        if config.enable_denoise:
+            denoised_dir = self.get_character_denoised_audio_dir(character_name)
+            if not denoised_dir.exists() or len(list(denoised_dir.glob("*.wav"))) == 0:
+                return ProcessingStatus.PENDING
+        
+        # 检查转录文件
+        transcripts_dir = self.get_character_transcripts_dir(character_name)
+        if not transcripts_dir.exists():
+            return ProcessingStatus.PENDING
+        
+        # 查找转录文件
+        transcript_files = []
+        for pattern in ["*.list", "*.txt", "*.tsv"]:
+            transcript_files.extend(list(transcripts_dir.glob(pattern)))
+        
+        if not transcript_files:
+            return ProcessingStatus.PENDING
+        
+        # 所有检查都通过，说明音频处理已完成
+        return ProcessingStatus.COMPLETED
+    
+    def check_training_status_from_files(self, character_name: str) -> ProcessingStatus:
+        """基于持久化文件检查训练状态"""
+        if character_name not in characters_db:
+            raise ValueError(f"角色不存在: {character_name}")
+        
+        # 首先检查音频处理是否完成
+        audio_status = self.check_audio_processing_status_from_files(character_name)
+        if audio_status != ProcessingStatus.COMPLETED:
+            return ProcessingStatus.PENDING
+        
+        # 检查实验目录是否存在
+        exp_dir = self.get_character_experiments_dir(character_name)
+        if not exp_dir.exists():
+            return ProcessingStatus.PENDING
+        
+        # 检查特征提取文件
+        feature_files = [
+            exp_dir / "2-name2text.txt",
+            exp_dir / "6-name2semantic.tsv"
+        ]
+        
+        for feature_file in feature_files:
+            if not feature_file.exists():
+                return ProcessingStatus.PENDING
+        
+        # 检查模型文件是否存在
+        gpt_weights_dir = self.base_dir / "GPT_weights_v2ProPlus"
+        sovits_weights_dir = self.base_dir / "SoVITS_weights_v2ProPlus"
+        
+        gpt_models = list(gpt_weights_dir.glob(f"{character_name}*.ckpt")) if gpt_weights_dir.exists() else []
+        sovits_models = list(sovits_weights_dir.glob(f"{character_name}*.pth")) if sovits_weights_dir.exists() else []
+        
+        if gpt_models and sovits_models:
+            return ProcessingStatus.COMPLETED
+        
+        return ProcessingStatus.PENDING
+    
+    def get_audio_files_list(self, character_name: str) -> List[AudioFileInfo]:
+        """获取角色的音频文件列表"""
+        if character_name not in characters_db:
+            raise ValueError(f"角色不存在: {character_name}")
+        
+        raw_audio_dir = self.get_character_raw_audio_dir(character_name)
+        if not raw_audio_dir.exists():
+            return []
+        
+        audio_files = []
+        for ext in ['wav', 'mp3', 'm4a', 'flac', 'aac', '3gp']:
+            audio_files.extend(raw_audio_dir.glob(f"*.{ext}"))
+        
+        file_info_list = []
+        for audio_file in audio_files:
+            stat = audio_file.stat()
+            
+            # 尝试获取音频时长
+            duration = None
+            try:
+                import librosa
+                duration = librosa.get_duration(path=str(audio_file))
+            except Exception:
+                # 如果librosa不可用或文件损坏，跳过时长获取
+                pass
+            
+            file_info = AudioFileInfo(
+                filename=audio_file.name,
+                file_path=str(audio_file),
+                file_size=stat.st_size,
+                created_at=datetime.fromtimestamp(stat.st_ctime),
+                modified_at=datetime.fromtimestamp(stat.st_mtime),
+                duration=duration
+            )
+            file_info_list.append(file_info)
+        
+        # 按文件名排序
+        file_info_list.sort(key=lambda x: x.filename)
+        return file_info_list
+    
+    def delete_audio_file(self, character_name: str, filename: str) -> bool:
+        """删除指定的音频文件"""
+        if character_name not in characters_db:
+            raise ValueError(f"角色不存在: {character_name}")
+        
+        raw_audio_dir = self.get_character_raw_audio_dir(character_name)
+        file_path = raw_audio_dir / filename
+        
+        if not file_path.exists():
+            raise ValueError(f"音频文件不存在: {filename}")
+        
+        # 删除文件
+        file_path.unlink()
+        
+        # 更新音频数量
+        self.update_character_audio_count(character_name)
+        
+        # 标记处理状态为过期
+        self.invalidate_processing_status(character_name, "delete_audio")
+        
+        logger.info(f"✅ 删除音频文件成功: {character_name}/{filename}")
+        return True
+    
+    def invalidate_processing_status(self, character_name: str, reason: str = "file_changed"):
+        """音频文件变更时使处理状态失效"""
+        if character_name in characters_db:
+            # 将音频处理状态设为过期（如果当前是已完成状态）
+            if characters_db[character_name].audio_processing_status == ProcessingStatus.COMPLETED:
+                characters_db[character_name].audio_processing_status = ProcessingStatus.OUTDATED
+                
+                # 同时更新audio_processing_db中的状态
+                if character_name in audio_processing_db:
+                    audio_processing_db[character_name].status = ProcessingStatus.OUTDATED
+                    audio_processing_db[character_name].error_message = f"音频文件已变更: {reason}"
+            
+            # 将训练状态设为过期（如果当前是已完成状态）
+            if characters_db[character_name].training_status == ProcessingStatus.COMPLETED:
+                characters_db[character_name].training_status = ProcessingStatus.OUTDATED
+                characters_db[character_name].model_exists = False
+                
+                # 同时更新training_db中的状态
+                if character_name in training_db:
+                    training_db[character_name].status = ProcessingStatus.OUTDATED
+                    training_db[character_name].error_message = f"音频文件已变更: {reason}"
+            
+            # 更新角色更新时间
+            characters_db[character_name].updated_at = datetime.now()
+            
+            logger.info(f"⚠️ 角色 {character_name} 的处理状态已标记为过期: {reason}")
     
     # ==================== 训练管理 ====================
     
@@ -1464,6 +1645,9 @@ async def upload_audio(character_name: str, file: UploadFile = File(...)):
     # 更新音频数量
     training_service.update_character_audio_count(character_name)
     
+    # 标记处理状态为过期
+    training_service.invalidate_processing_status(character_name, "add_audio")
+    
     return {"message": "音频上传成功", "filename": file.filename, "path": str(file_path)}
 
 # 音频处理API
@@ -1483,6 +1667,32 @@ async def get_audio_processing_status(character_name: str):
         raise HTTPException(status_code=404, detail="音频处理记录不存在")
     return audio_processing_db[character_name]
 
+@app.get("/api/v1/characters/{character_name}/audio/check_status")
+async def check_audio_processing_status_from_files(character_name: str):
+    """基于持久化文件检查音频处理状态"""
+    try:
+        status = training_service.check_audio_processing_status_from_files(character_name)
+        return {"character_name": character_name, "status": status.value, "message": "基于文件系统的状态检查"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/api/v1/characters/{character_name}/audio/files", response_model=List[AudioFileInfo])
+async def get_audio_files_list(character_name: str):
+    """获取角色的音频文件列表"""
+    try:
+        return training_service.get_audio_files_list(character_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.delete("/api/v1/characters/{character_name}/audio/files/{filename}")
+async def delete_audio_file(character_name: str, filename: str):
+    """删除指定的音频文件"""
+    try:
+        success = training_service.delete_audio_file(character_name, filename)
+        return {"message": "音频文件删除成功", "filename": filename, "success": success}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 # 训练API
 @app.post("/api/v1/characters/{character_name}/training/start", response_model=TrainingInfo)
 async def start_training(character_name: str, background_tasks: BackgroundTasks):
@@ -1499,6 +1709,15 @@ async def get_training_status(character_name: str):
     if character_name not in training_db:
         raise HTTPException(status_code=404, detail="训练记录不存在")
     return training_db[character_name]
+
+@app.get("/api/v1/characters/{character_name}/training/check_status")
+async def check_training_status_from_files(character_name: str):
+    """基于持久化文件检查训练状态"""
+    try:
+        status = training_service.check_training_status_from_files(character_name)
+        return {"character_name": character_name, "status": status.value, "message": "基于文件系统的状态检查"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 @app.post("/api/v1/characters/{character_name}/training/clean")
 async def clean_training_models(character_name: str):
