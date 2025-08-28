@@ -1041,6 +1041,13 @@ class CharacterBasedTrainingService:
             config = self._build_training_config(character_name)
             
             if step == TrainingStep.EXTRACT_TEXT_FEATURES:
+                # 清理文本特征提取的输出文件
+                exp_dir = Path(config["EXP_DIR"])
+                for pattern in ["2-name2text-*.txt", "2-name2text.txt"]:
+                    for file_to_remove in exp_dir.glob(pattern):
+                        file_to_remove.unlink()
+                        logger.debug(f"删除旧的文本特征文件: {file_to_remove}")
+                
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
@@ -1058,6 +1065,13 @@ class CharacterBasedTrainingService:
                 return success
                 
             elif step == TrainingStep.EXTRACT_AUDIO_FEATURES:
+                # 清理音频特征提取的输出文件
+                exp_dir = Path(config["EXP_DIR"])
+                for pattern in ["3-*.pt", "4-*.pt"]:
+                    for file_to_remove in exp_dir.glob(pattern):
+                        file_to_remove.unlink()
+                        logger.debug(f"删除旧的音频特征文件: {file_to_remove}")
+                
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
@@ -1067,6 +1081,13 @@ class CharacterBasedTrainingService:
                 )
                 
             elif step == TrainingStep.EXTRACT_SPEAKER_VECTORS:
+                # 清理说话人向量提取的输出文件
+                exp_dir = Path(config["EXP_DIR"])
+                for pattern in ["5-*.npy"]:
+                    for file_to_remove in exp_dir.glob(pattern):
+                        file_to_remove.unlink()
+                        logger.debug(f"删除旧的说话人向量文件: {file_to_remove}")
+                
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
@@ -1076,6 +1097,13 @@ class CharacterBasedTrainingService:
                 )
                 
             elif step == TrainingStep.EXTRACT_SEMANTIC_FEATURES:
+                # 清理语义特征提取的输出文件
+                exp_dir = Path(config["EXP_DIR"])
+                for pattern in ["6-name2semantic-*.tsv", "6-name2semantic.tsv"]:
+                    for file_to_remove in exp_dir.glob(pattern):
+                        file_to_remove.unlink()
+                        logger.debug(f"删除旧的语义特征文件: {file_to_remove}")
+                
                 env_vars = self._build_step_env(config)
                 gpu_ids = config["GPU_ID"]
                 parallel_parts = len(gpu_ids.split('-')) if '-' in gpu_ids else 1
