@@ -595,17 +595,12 @@ class CharacterBasedTrainingService:
         processing_info = audio_processing_db[character_name]
         
         try:
-            # 初始化进度条
-            processing_info.progress = 0.0
-            processing_info.current_step = "准备中..."
-            
             for i, step in enumerate(steps):
-                # 更新当前步骤名称
                 processing_info.current_step = step.value
+                processing_info.progress = (i / len(steps)) * 100
                 
                 logger.info(f"开始执行 {character_name} 的音频处理步骤: {step.value}")
                 
-                # 执行步骤
                 success = await self._execute_audio_processing_step(character_name, step)
                 
                 if not success:
@@ -613,10 +608,6 @@ class CharacterBasedTrainingService:
                     processing_info.error_message = f"步骤 {step.value} 失败"
                     characters_db[character_name].audio_processing_status = ProcessingStatus.FAILED
                     return
-                
-                # 步骤完成后更新进度条
-                processing_info.progress = ((i + 1) / len(steps)) * 100
-                logger.info(f"✅ 步骤 {step.value} 完成，进度: {processing_info.progress:.1f}%")
             
             # 所有步骤完成
             processing_info.status = ProcessingStatus.COMPLETED
@@ -803,17 +794,12 @@ class CharacterBasedTrainingService:
         training_info = training_db[character_name]
         
         try:
-            # 初始化进度条
-            training_info.progress = 0.0
-            training_info.current_step = "准备中..."
-            
             for i, step in enumerate(steps):
-                # 更新当前步骤名称
                 training_info.current_step = step.value
+                training_info.progress = (i / len(steps)) * 100
                 
                 logger.info(f"开始执行 {character_name} 的训练步骤: {step.value}")
                 
-                # 执行步骤
                 success = await self._execute_training_step(character_name, step)
                 
                 if not success:
@@ -821,10 +807,6 @@ class CharacterBasedTrainingService:
                     training_info.error_message = f"步骤 {step.value} 失败"
                     characters_db[character_name].training_status = ProcessingStatus.FAILED
                     return
-                
-                # 步骤完成后更新进度条
-                training_info.progress = ((i + 1) / len(steps)) * 100
-                logger.info(f"✅ 步骤 {step.value} 完成，进度: {training_info.progress:.1f}%")
             
             # 所有步骤完成
             training_info.status = ProcessingStatus.COMPLETED
