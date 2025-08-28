@@ -547,7 +547,7 @@ class CharacterBasedTrainingService:
             return 0
         
         audio_files = []
-        for ext in ['wav', 'mp3', 'm4a', 'flac', 'aac']:
+        for ext in ['wav', 'mp3', 'm4a', 'flac', 'aac', '3gp']:
             audio_files.extend(raw_audio_dir.glob(f"*.{ext}"))
         
         return len(audio_files)

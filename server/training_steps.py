@@ -35,7 +35,7 @@ class StepProcessor:
             
             # 查找需要转换的音频文件
             audio_files = []
-            for ext in ['*.m4a', '*.mp3', '*.aac', '*.flac']:
+            for ext in ['*.m4a', '*.mp3', '*.aac', '*.flac', '*.3gp']:
                 audio_files.extend(input_path.glob(ext))
             
             if not audio_files:
