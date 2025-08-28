@@ -635,22 +635,46 @@ class CharacterBasedTrainingService:
             characters_db[character_name].audio_processing_status = ProcessingStatus.FAILED
             logger.error(f"❌ {character_name} 音频处理失败: {e}")
     
+    def _clean_output_directory(self, output_dir: str, step_name: str):
+        """清空输出目录"""
+        try:
+            output_path = Path(output_dir)
+            if output_path.exists():
+                logger.info(f"🧹 清空 {step_name} 输出目录: {output_dir}")
+                # 删除目录中的所有文件，但保留目录结构
+                for item in output_path.iterdir():
+                    if item.is_file():
+                        item.unlink()
+                        logger.debug(f"删除文件: {item}")
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+                        logger.debug(f"删除目录: {item}")
+            else:
+                # 如果目录不存在，创建它
+                output_path.mkdir(parents=True, exist_ok=True)
+                logger.info(f"📁 创建输出目录: {output_dir}")
+        except Exception as e:
+            logger.warning(f"清空输出目录失败 {output_dir}: {e}")
+
     async def _execute_audio_processing_step(self, character_name: str, step: AudioProcessingStep) -> bool:
         """执行单个音频处理步骤"""
         try:
             if step == AudioProcessingStep.CONVERT_AUDIO:
                 input_dir = str(self.get_character_raw_audio_dir(character_name))
                 output_dir = str(self.get_character_converted_audio_dir(character_name))
+                self._clean_output_directory(output_dir, "音频转换")
                 return await self.step_processor.convert_audio(input_dir, output_dir)
                 
             elif step == AudioProcessingStep.SLICE_AUDIO:
                 input_dir = str(self.get_character_converted_audio_dir(character_name))
                 output_dir = str(self.get_character_sliced_audio_dir(character_name))
+                self._clean_output_directory(output_dir, "音频切片")
                 return await self.step_processor.slice_audio(input_dir, output_dir)
                 
             elif step == AudioProcessingStep.DENOISE_AUDIO:
                 input_dir = str(self.get_character_sliced_audio_dir(character_name))
                 output_dir = str(self.get_character_denoised_audio_dir(character_name))
+                self._clean_output_directory(output_dir, "音频降噪")
                 return await self.step_processor.denoise_audio(input_dir, output_dir)
                 
             elif step == AudioProcessingStep.ASR_TRANSCRIBE:
@@ -660,6 +684,7 @@ class CharacterBasedTrainingService:
                     input_dir = str(self.get_character_sliced_audio_dir(character_name))
                     
                 output_dir = str(self.get_character_transcripts_dir(character_name))
+                self._clean_output_directory(output_dir, "语音转录")
                 language = characters_db[character_name].config.language
                 return await self.step_processor.asr_transcribe(input_dir, output_dir, language)
             
