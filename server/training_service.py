@@ -756,10 +756,10 @@ class CharacterBasedTrainingService:
         if character_name not in characters_db:
             raise ValueError(f"角色不存在: {character_name}")
         
-        # 首先检查音频处理是否完成
-        audio_status = self.check_audio_processing_status_from_files(character_name)
-        if audio_status != ProcessingStatus.COMPLETED:
-            return ProcessingStatus.PENDING
+        # # 首先检查音频处理是否完成
+        # audio_status = self.check_audio_processing_status_from_files(character_name)
+        # if audio_status != ProcessingStatus.COMPLETED:
+        #     return ProcessingStatus.PENDING
         
         # 检查实验目录是否存在
         exp_dir = self.get_character_experiments_dir(character_name)
