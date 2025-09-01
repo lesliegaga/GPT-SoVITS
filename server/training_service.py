@@ -199,9 +199,6 @@ class CharacterInfo(BaseModel):
     created_at: datetime
     updated_at: datetime
     audio_count: int = 0
-    audio_processing_status: ProcessingStatus = ProcessingStatus.PENDING
-    training_status: ProcessingStatus = ProcessingStatus.PENDING
-    model_exists: bool = False
     is_default: bool = False
 
 # 音频处理信息模型
@@ -372,12 +369,18 @@ class CharacterBasedTrainingService:
         if not new_name.replace('_', '').replace('-', '').isalnum():
             raise ValueError("角色名称只能包含字母、数字、下划线和连字符")
         
+        # 重命名公共目录下的模型文件
+        self._rename_character_models_in_public_dirs(old_name, new_name)
+        
         # 重命名目录
         old_dir = self.get_character_dir(old_name)
         new_dir = self.get_character_dir(new_name)
         
         if old_dir.exists():
             shutil.move(str(old_dir), str(new_dir))
+        
+        # 清理角色目录下的旧软链接（为后续同步做准备）
+        self._clean_old_model_links(new_name)
         
         # 更新数据库
         character_info = characters_db[old_name]
@@ -388,16 +391,38 @@ class CharacterBasedTrainingService:
         characters_db[new_name] = character_info
         del characters_db[old_name]
         
-        # 更新音频处理和训练信息
+        # 清理旧的数据库记录
         if old_name in audio_processing_db:
-            audio_processing_db[old_name].character_name = new_name
-            audio_processing_db[new_name] = audio_processing_db[old_name]
             del audio_processing_db[old_name]
-        
+
         if old_name in training_db:
-            training_db[old_name].character_name = new_name
-            training_db[new_name] = training_db[old_name]
             del training_db[old_name]
+
+        # 重新从文件系统读取并设置新记录（参考_load_existing_characters的处理逻辑）
+        # 重新检查音频处理状态
+        try:
+            audio_status = self.check_audio_processing_status_from_files(new_name)
+            if audio_status == ProcessingStatus.COMPLETED:
+                # 重新构建音频处理信息
+                audio_processing_db[new_name] = AudioProcessingInfo(
+                    character_name=new_name,
+                    status=ProcessingStatus.COMPLETED,
+                    processed_audio_count=self.get_processed_audio_count(new_name),
+                    completed_at=datetime.now()  # 使用当前时间作为完成时间
+                )
+                logger.info(f"✅ 角色 {new_name} 的音频处理状态已从文件系统重新加载")
+        except Exception as e:
+            logger.warning(f"重新检查角色 {new_name} 的音频处理状态失败: {e}")
+
+        # 重新检查训练状态
+        try:
+            if self._find_models_in_filesystem(new_name):
+                # 模型存在，training_db 已在 _find_models_in_filesystem 中更新
+                logger.info(f"✅ 角色 {new_name} 的训练状态已从文件系统重新加载")
+                # 同步模型到角色目录
+                self._sync_character_models_dir(new_name)
+        except Exception as e:
+            logger.warning(f"重新检查角色 {new_name} 的训练状态失败: {e}")
         
         # 更新默认角色
         global default_character
@@ -458,24 +483,76 @@ class CharacterBasedTrainingService:
         try:
             # 清理所有版本的权重目录
             for version in ["v1", "v2", "v2Pro", "v2ProPlus", "v3", "v4"]:
-                # 清理GPT权重
+                # 清理GPT权重（支持两种格式：_ 和 -）
                 gpt_weights_dir = self.base_dir / f"GPT_weights_{version}"
                 if gpt_weights_dir.exists():
-                    for gpt_file in gpt_weights_dir.glob(f"{character_name}*.ckpt"):
-                        logger.info(f"🧹 删除公共目录下的GPT权重文件: {gpt_file}")
-                        gpt_file.unlink()
+                    # 查找以角色名称开头的GPT文件（支持 _ 和 - 格式）
+                    for pattern in [f"{character_name}_*.ckpt", f"{character_name}-*.ckpt"]:
+                        for gpt_file in gpt_weights_dir.glob(pattern):
+                            logger.info(f"🧹 删除公共目录下的GPT权重文件: {gpt_file}")
+                            gpt_file.unlink()
                 
-                # 清理SoVITS权重
+                # 清理SoVITS权重（支持两种格式：_ 和 -）
                 sovits_weights_dir = self.base_dir / f"SoVITS_weights_{version}"
                 if sovits_weights_dir.exists():
-                    for sovits_file in sovits_weights_dir.glob(f"{character_name}*.pth"):
-                        logger.info(f"🧹 删除公共目录下的SoVITS权重文件: {sovits_file}")
-                        sovits_file.unlink()
+                    # 查找以角色名称开头的SoVITS文件（支持 _ 和 - 格式）
+                    for pattern in [f"{character_name}_*.pth", f"{character_name}-*.pth"]:
+                        for sovits_file in sovits_weights_dir.glob(pattern):
+                            logger.info(f"🧹 删除公共目录下的SoVITS权重文件: {sovits_file}")
+                            sovits_file.unlink()
             
             logger.info(f"✅ 角色 {character_name} 的公共模型文件清理完成")
             
         except Exception as e:
             logger.warning(f"清理公共目录下的模型文件失败: {e}")
+    
+    def _rename_character_models_in_public_dirs(self, old_name: str, new_name: str):
+        """重命名公共目录下的角色模型文件"""
+        try:
+            # 重命名所有版本的权重目录
+            for version in ["v1", "v2", "v2Pro", "v2ProPlus", "v3", "v4"]:
+                # 重命名GPT权重（支持两种格式：_ 和 -）
+                gpt_weights_dir = self.base_dir / f"GPT_weights_{version}"
+                if gpt_weights_dir.exists():
+                    # 查找以旧角色名称开头的GPT文件（支持 _ 和 - 格式）
+                    for pattern in [f"{old_name}_*.ckpt", f"{old_name}-*.ckpt"]:
+                        for gpt_file in gpt_weights_dir.glob(pattern):
+                            new_gpt_file = gpt_file.parent / gpt_file.name.replace(old_name, new_name, 1)
+                            logger.info(f"🔄 重命名公共目录下的GPT权重文件: {gpt_file} -> {new_gpt_file}")
+                            gpt_file.rename(new_gpt_file)
+                
+                # 重命名SoVITS权重（支持两种格式：_ 和 -）
+                sovits_weights_dir = self.base_dir / f"SoVITS_weights_{version}"
+                if sovits_weights_dir.exists():
+                    # 查找以旧角色名称开头的SoVITS文件（支持 _ 和 - 格式）
+                    for pattern in [f"{old_name}_*.pth", f"{old_name}-*.pth"]:
+                        for sovits_file in sovits_weights_dir.glob(pattern):
+                            new_sovits_file = sovits_file.parent / sovits_file.name.replace(old_name, new_name, 1)
+                            logger.info(f"🔄 重命名公共目录下的SoVITS权重文件: {sovits_file} -> {new_sovits_file}")
+                            sovits_file.rename(new_sovits_file)
+            
+            logger.info(f"✅ 角色 {old_name} -> {new_name} 的公共模型文件重命名完成")
+            
+        except Exception as e:
+            logger.warning(f"重命名公共目录下的模型文件失败: {e}")
+    
+    def _clean_old_model_links(self, character_name: str):
+        """清理角色目录下的旧模型软链接，为后续同步做准备"""
+        try:
+            models_dir = self.get_character_models_dir(character_name)
+            if not models_dir.exists():
+                return
+            
+            # 清理所有现有的软链接和文件，让 _sync_character_models_dir 重新创建
+            for model_file in models_dir.iterdir():
+                if model_file.is_symlink() or model_file.is_file():
+                    model_file.unlink()
+                    logger.info(f"🗑️  清理旧模型链接: {model_file.name}")
+            
+            logger.info(f"✅ 角色 {character_name} 的旧模型链接清理完成")
+            
+        except Exception as e:
+            logger.warning(f"清理角色目录下的旧模型链接失败: {e}")
     
     def set_default_character(self, character_name: str) -> bool:
         """设置默认角色"""
@@ -593,7 +670,6 @@ class CharacterBasedTrainingService:
         )
         
         audio_processing_db[character_name] = processing_info
-        characters_db[character_name].audio_processing_status = ProcessingStatus.RUNNING
         
         # 启动异步处理
         asyncio.create_task(self._execute_audio_processing(character_name, steps))
@@ -616,7 +692,6 @@ class CharacterBasedTrainingService:
                 if not success:
                     processing_info.status = ProcessingStatus.FAILED
                     processing_info.error_message = f"步骤 {step.value} 失败"
-                    characters_db[character_name].audio_processing_status = ProcessingStatus.FAILED
                     return
             
             # 所有步骤完成
@@ -625,14 +700,11 @@ class CharacterBasedTrainingService:
             processing_info.completed_at = datetime.now()
             processing_info.processed_audio_count = self.get_processed_audio_count(character_name)
             
-            characters_db[character_name].audio_processing_status = ProcessingStatus.COMPLETED
-            
             logger.info(f"✅ {character_name} 音频处理完成")
             
         except Exception as e:
             processing_info.status = ProcessingStatus.FAILED
             processing_info.error_message = str(e)
-            characters_db[character_name].audio_processing_status = ProcessingStatus.FAILED
             logger.error(f"❌ {character_name} 音频处理失败: {e}")
     
     def _clean_output_directory(self, output_dir: str, step_name: str):
@@ -855,21 +927,14 @@ class CharacterBasedTrainingService:
         """音频文件变更时使处理状态失效"""
         if character_name in characters_db:
             # 将音频处理状态设为过期（如果当前是已完成状态）
-            if characters_db[character_name].audio_processing_status == ProcessingStatus.COMPLETED:
-                characters_db[character_name].audio_processing_status = ProcessingStatus.OUTDATED
-                
-                # 同时更新audio_processing_db中的状态
-                if character_name in audio_processing_db:
+            if character_name in audio_processing_db:
+                if audio_processing_db[character_name].status == ProcessingStatus.COMPLETED:
                     audio_processing_db[character_name].status = ProcessingStatus.OUTDATED
                     audio_processing_db[character_name].error_message = f"音频文件已变更: {reason}"
             
             # 将训练状态设为过期（如果当前是已完成状态）
-            if characters_db[character_name].training_status == ProcessingStatus.COMPLETED:
-                characters_db[character_name].training_status = ProcessingStatus.OUTDATED
-                characters_db[character_name].model_exists = False
-                
-                # 同时更新training_db中的状态
-                if character_name in training_db:
+            if character_name in training_db:
+                if training_db[character_name].status == ProcessingStatus.COMPLETED:
                     training_db[character_name].status = ProcessingStatus.OUTDATED
                     training_db[character_name].error_message = f"音频文件已变更: {reason}"
             
@@ -964,8 +1029,14 @@ class CharacterBasedTrainingService:
             raise ValueError(f"角色不存在: {character_name}")
         
         # 检查音频处理是否完成
-        if characters_db[character_name].audio_processing_status != ProcessingStatus.COMPLETED:
-            raise ValueError(f"角色 {character_name} 的音频处理尚未完成，无法开始训练")
+        if character_name in audio_processing_db:
+            if audio_processing_db[character_name].status != ProcessingStatus.COMPLETED:
+                raise ValueError(f"角色 {character_name} 的音频处理尚未完成，无法开始训练")
+        else:
+            # 如果没有音频处理记录，检查文件系统状态
+            audio_status = self.check_audio_processing_status_from_files(character_name)
+            if audio_status != ProcessingStatus.COMPLETED:
+                raise ValueError(f"角色 {character_name} 的音频处理尚未完成，无法开始训练")
         
         # 注意：不在开始训练时清理，而是在每个具体步骤前智能清理
         logger.info(f"🚀 开始角色 {character_name} 的训练流程")
@@ -988,7 +1059,6 @@ class CharacterBasedTrainingService:
         )
         
         training_db[character_name] = training_info
-        characters_db[character_name].training_status = ProcessingStatus.RUNNING
         
         # 启动异步训练
         asyncio.create_task(self._execute_training(character_name, steps))
@@ -1011,7 +1081,6 @@ class CharacterBasedTrainingService:
                 if not success:
                     training_info.status = ProcessingStatus.FAILED
                     training_info.error_message = f"步骤 {step.value} 失败"
-                    characters_db[character_name].training_status = ProcessingStatus.FAILED
                     return
             
             # 所有步骤完成
@@ -1024,15 +1093,11 @@ class CharacterBasedTrainingService:
             # 同步模型到角色目录
             self._sync_character_models_dir(character_name)
             
-            characters_db[character_name].training_status = ProcessingStatus.COMPLETED
-            characters_db[character_name].model_exists = True
-            
             logger.info(f"✅ {character_name} 训练完成")
             
         except Exception as e:
             training_info.status = ProcessingStatus.FAILED
             training_info.error_message = str(e)
-            characters_db[character_name].training_status = ProcessingStatus.FAILED
             logger.error(f"❌ {character_name} 训练失败: {e}")
     
     async def _execute_training_step(self, character_name: str, step: TrainingStep) -> bool:
@@ -1156,7 +1221,8 @@ class CharacterBasedTrainingService:
         if character_name not in characters_db:
             raise ValueError(f"角色不存在: {character_name}")
         
-        if not characters_db[character_name].model_exists:
+        # 检查模型是否存在
+        if not self._check_models_exist(character_name):
             raise ValueError(f"角色 {character_name} 的模型尚未训练完成")
         
         # 创建推理信息
@@ -1246,7 +1312,6 @@ class CharacterBasedTrainingService:
                         
                         # 更新音频数量和状态
                         self.update_character_audio_count(character_name)
-                        self._update_character_status(character_name)
                         
                         # 自动检查模型状态
                         if self._check_models_exist(character_name):
@@ -1300,20 +1365,6 @@ class CharacterBasedTrainingService:
             with open(default_file, 'w', encoding='utf-8') as f:
                 f.write(default_character)
     
-    def _update_character_status(self, character_name: str):
-        """更新角色状态"""
-        character_info = characters_db[character_name]
-        
-        # 检查音频处理状态
-        if character_name in audio_processing_db:
-            character_info.audio_processing_status = audio_processing_db[character_name].status
-        
-        # 检查训练状态
-        if character_name in training_db:
-            character_info.training_status = training_db[character_name].status
-        
-        # 检查模型是否存在
-        character_info.model_exists = self._check_models_exist(character_name)
     
     def _check_models_exist(self, character_name: str) -> bool:
         """检查模型是否存在"""
