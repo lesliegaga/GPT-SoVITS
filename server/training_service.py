@@ -199,6 +199,9 @@ class CharacterInfo(BaseModel):
     created_at: datetime
     updated_at: datetime
     audio_count: int = 0
+    audio_processing_status: ProcessingStatus = ProcessingStatus.PENDING
+    training_status: ProcessingStatus = ProcessingStatus.PENDING
+    model_exists: bool = False
     is_default: bool = False
 
 # 音频处理信息模型
@@ -344,8 +347,8 @@ class CharacterBasedTrainingService:
         # 保存到数据库
         characters_db[character_name] = character_info
         
-        # 保存角色配置文件
-        self._save_character_config(character_name, character_info)
+        # 检查并更新初始状态
+        character_info.model_exists = self._check_models_exist(character_name)
         
         # 如果是第一个角色，设置为默认角色
         global default_character
@@ -353,6 +356,9 @@ class CharacterBasedTrainingService:
             default_character = character_name
             character_info.is_default = True
             self._save_default_character()
+        
+        # 保存角色配置文件（包含is_default状态）
+        self._save_character_config(character_name, character_info)
         
         logger.info(f"✅ 角色创建成功: {character_name}")
         return character_info
@@ -467,6 +473,8 @@ class CharacterBasedTrainingService:
             if remaining_characters:
                 default_character = remaining_characters[0]
                 characters_db[default_character].is_default = True
+                # 持久化新默认角色的配置变更
+                self._save_character_config(default_character, characters_db[default_character])
                 self._save_default_character()
             else:
                 default_character = None
@@ -564,12 +572,17 @@ class CharacterBasedTrainingService:
         # 清除旧的默认标记
         if default_character and default_character in characters_db:
             characters_db[default_character].is_default = False
+            # 持久化旧默认角色的配置变更
+            self._save_character_config(default_character, characters_db[default_character])
         
         # 设置新的默认角色
         default_character = character_name
         characters_db[character_name].is_default = True
         
-        # 保存配置
+        # 持久化新默认角色的配置变更
+        self._save_character_config(character_name, characters_db[character_name])
+        
+        # 保存默认角色全局配置
         self._save_default_character()
         
         logger.info(f"✅ 默认角色设置为: {character_name}")
@@ -644,6 +657,8 @@ class CharacterBasedTrainingService:
         if character_name in characters_db:
             characters_db[character_name].audio_count = self.get_audio_count(character_name)
             characters_db[character_name].updated_at = datetime.now()
+            # 持久化audio_count更新
+            self._save_character_config(character_name, characters_db[character_name])
     
     async def start_audio_processing(self, character_name: str, steps: List[AudioProcessingStep] = None) -> AudioProcessingInfo:
         """开始音频处理"""
@@ -671,6 +686,11 @@ class CharacterBasedTrainingService:
         
         audio_processing_db[character_name] = processing_info
         
+        # 同步更新CharacterInfo中的状态
+        characters_db[character_name].audio_processing_status = ProcessingStatus.RUNNING
+        characters_db[character_name].updated_at = datetime.now()
+        self._save_character_config(character_name, characters_db[character_name])
+        
         # 启动异步处理
         asyncio.create_task(self._execute_audio_processing(character_name, steps))
         
@@ -692,6 +712,10 @@ class CharacterBasedTrainingService:
                 if not success:
                     processing_info.status = ProcessingStatus.FAILED
                     processing_info.error_message = f"步骤 {step.value} 失败"
+                    # 同步更新CharacterInfo中的状态
+                    characters_db[character_name].audio_processing_status = ProcessingStatus.FAILED
+                    characters_db[character_name].updated_at = datetime.now()
+                    self._save_character_config(character_name, characters_db[character_name])
                     return
             
             # 所有步骤完成
@@ -700,11 +724,20 @@ class CharacterBasedTrainingService:
             processing_info.completed_at = datetime.now()
             processing_info.processed_audio_count = self.get_processed_audio_count(character_name)
             
+            # 同步更新CharacterInfo中的状态
+            characters_db[character_name].audio_processing_status = ProcessingStatus.COMPLETED
+            characters_db[character_name].updated_at = datetime.now()
+            self._save_character_config(character_name, characters_db[character_name])
+            
             logger.info(f"✅ {character_name} 音频处理完成")
             
         except Exception as e:
             processing_info.status = ProcessingStatus.FAILED
             processing_info.error_message = str(e)
+            # 同步更新CharacterInfo中的状态
+            characters_db[character_name].audio_processing_status = ProcessingStatus.FAILED
+            characters_db[character_name].updated_at = datetime.now()
+            self._save_character_config(character_name, characters_db[character_name])
             logger.error(f"❌ {character_name} 音频处理失败: {e}")
     
     def _clean_output_directory(self, output_dir: str, step_name: str):
@@ -926,20 +959,38 @@ class CharacterBasedTrainingService:
     def invalidate_processing_status(self, character_name: str, reason: str = "file_changed"):
         """音频文件变更时使处理状态失效"""
         if character_name in characters_db:
+            status_updated = False
+            
             # 将音频处理状态设为过期（如果当前是已完成状态）
             if character_name in audio_processing_db:
                 if audio_processing_db[character_name].status == ProcessingStatus.COMPLETED:
                     audio_processing_db[character_name].status = ProcessingStatus.OUTDATED
                     audio_processing_db[character_name].error_message = f"音频文件已变更: {reason}"
+                    # 同步更新CharacterInfo中的音频处理状态
+                    characters_db[character_name].audio_processing_status = ProcessingStatus.OUTDATED
+                    status_updated = True
             
             # 将训练状态设为过期（如果当前是已完成状态）
             if character_name in training_db:
                 if training_db[character_name].status == ProcessingStatus.COMPLETED:
                     training_db[character_name].status = ProcessingStatus.OUTDATED
                     training_db[character_name].error_message = f"音频文件已变更: {reason}"
+                    # 同步更新CharacterInfo中的训练状态
+                    characters_db[character_name].training_status = ProcessingStatus.OUTDATED
+                    status_updated = True
+            
+            # 重新检查模型存在状态，因为文件变更可能影响模型有效性
+            current_model_exists = self._check_models_exist(character_name)
+            if characters_db[character_name].model_exists != current_model_exists:
+                characters_db[character_name].model_exists = current_model_exists
+                status_updated = True
             
             # 更新角色更新时间
             characters_db[character_name].updated_at = datetime.now()
+            
+            # 如果状态有更新，保存配置
+            if status_updated:
+                self._save_character_config(character_name, characters_db[character_name])
             
             logger.info(f"⚠️ 角色 {character_name} 的处理状态已标记为过期: {reason}")
     
@@ -1060,6 +1111,11 @@ class CharacterBasedTrainingService:
         
         training_db[character_name] = training_info
         
+        # 同步更新CharacterInfo中的状态
+        characters_db[character_name].training_status = ProcessingStatus.RUNNING
+        characters_db[character_name].updated_at = datetime.now()
+        self._save_character_config(character_name, characters_db[character_name])
+        
         # 启动异步训练
         asyncio.create_task(self._execute_training(character_name, steps))
         
@@ -1081,6 +1137,10 @@ class CharacterBasedTrainingService:
                 if not success:
                     training_info.status = ProcessingStatus.FAILED
                     training_info.error_message = f"步骤 {step.value} 失败"
+                    # 同步更新CharacterInfo中的状态
+                    characters_db[character_name].training_status = ProcessingStatus.FAILED
+                    characters_db[character_name].updated_at = datetime.now()
+                    self._save_character_config(character_name, characters_db[character_name])
                     return
             
             # 所有步骤完成
@@ -1093,11 +1153,21 @@ class CharacterBasedTrainingService:
             # 同步模型到角色目录
             self._sync_character_models_dir(character_name)
             
+            # 同步更新CharacterInfo中的状态，包括模型存在状态
+            characters_db[character_name].training_status = ProcessingStatus.COMPLETED
+            characters_db[character_name].model_exists = self._check_models_exist(character_name)
+            characters_db[character_name].updated_at = datetime.now()
+            self._save_character_config(character_name, characters_db[character_name])
+            
             logger.info(f"✅ {character_name} 训练完成")
             
         except Exception as e:
             training_info.status = ProcessingStatus.FAILED
             training_info.error_message = str(e)
+            # 同步更新CharacterInfo中的状态
+            characters_db[character_name].training_status = ProcessingStatus.FAILED
+            characters_db[character_name].updated_at = datetime.now()
+            self._save_character_config(character_name, characters_db[character_name])
             logger.error(f"❌ {character_name} 训练失败: {e}")
     
     async def _execute_training_step(self, character_name: str, step: TrainingStep) -> bool:
@@ -1299,27 +1369,53 @@ class CharacterBasedTrainingService:
                         
                         character_info = CharacterInfo(**config_data)
                         
+                        # 检查并更新所有状态字段
+                        status_updated = False
                         # 动态更新GPU配置：如果当前环境与配置文件不一致，更新配置
                         current_gpu_env = os.environ.get("CUDA_VISIBLE_DEVICES")
                         if current_gpu_env and character_info.config.gpu_id != current_gpu_env:
                             old_gpu_id = character_info.config.gpu_id
                             character_info.config.gpu_id = current_gpu_env
                             logger.info(f"角色 {character_name} GPU配置已更新: {old_gpu_id} -> {current_gpu_env}")
-                            # 保存更新后的配置
-                            self._save_character_config(character_name, character_info)
-                        
+                            status_updated = True
                         characters_db[character_name] = character_info
                         
                         # 更新音频数量和状态
                         self.update_character_audio_count(character_name)
                         
-                        # 自动检查模型状态
-                        if self._check_models_exist(character_name):
-                            logger.info(f"✅ 角色 {character_name} 已训练完成")
-                            # 将模型同步到角色目录
-                            self._sync_character_models_dir(character_name)
-                        else:
-                            logger.info(f"⚠️  角色 {character_name} 尚未训练完成")
+                        
+                        # 检查模型存在状态
+                        current_model_exists = self._check_models_exist(character_name)
+                        if character_info.model_exists != current_model_exists:
+                            character_info.model_exists = current_model_exists
+                            status_updated = True
+                            if current_model_exists:
+                                logger.info(f"✅ 角色 {character_name} 已训练完成")
+                                # 将模型同步到角色目录
+                                self._sync_character_models_dir(character_name)
+                                # 如果模型存在且训练状态不是已完成，更新训练状态
+                                if character_info.training_status != ProcessingStatus.COMPLETED:
+                                    character_info.training_status = ProcessingStatus.COMPLETED
+                            else:
+                                logger.info(f"⚠️  角色 {character_name} 尚未训练完成")
+                        
+                        # 检查音频处理状态
+                        audio_processing_info = audio_processing_db.get(character_name)
+                        if audio_processing_info:
+                            if character_info.audio_processing_status != audio_processing_info.status:
+                                character_info.audio_processing_status = audio_processing_info.status
+                                status_updated = True
+                        
+                        # 检查训练状态
+                        training_info = training_db.get(character_name)
+                        if training_info:
+                            if character_info.training_status != training_info.status:
+                                character_info.training_status = training_info.status
+                                status_updated = True
+                        
+                        # 如果状态有更新，保存配置
+                        if status_updated:
+                            self._save_character_config(character_name, character_info)
                         
                         logger.info(f"加载角色: {character_name}")
                         
@@ -1343,7 +1439,9 @@ class CharacterBasedTrainingService:
                             characters_db[cur_name].is_default = True
                         else:
                             characters_db[cur_name].is_default = False
-                        logger.info(f"加载默认角色: {character_name}")
+                        # 持久化is_default状态变更
+                        self._save_character_config(cur_name, characters_db[cur_name])
+                    logger.info(f"加载默认角色: {character_name}")
                 else:
                     logger.warning(f"默认角色不存在: {character_name}")
                     
@@ -1415,6 +1513,13 @@ class CharacterBasedTrainingService:
                                 training_db[character_name].sovits_model_path = str(latest_sovits)
                                 training_db[character_name].status = ProcessingStatus.COMPLETED
                             
+                            # 同步更新CharacterInfo中的训练状态和模型存在状态
+                            if character_name in characters_db:
+                                characters_db[character_name].training_status = ProcessingStatus.COMPLETED
+                                characters_db[character_name].model_exists = True
+                                characters_db[character_name].updated_at = datetime.now()
+                                self._save_character_config(character_name, characters_db[character_name])
+                            
                             logger.info(f"✅ 发现已训练的模型: {character_name}")
                             logger.info(f"   GPT模型: {latest_gpt}")
                             logger.info(f"   SoVITS模型: {latest_sovits}")
@@ -1463,6 +1568,12 @@ class CharacterBasedTrainingService:
         if gpt_dst.exists() and sovits_dst.exists():
             training_info.gpt_model_path = str(gpt_dst)
             training_info.sovits_model_path = str(sovits_dst)
+            
+            # 同步更新CharacterInfo中的model_exists状态
+            characters_db[character_name].model_exists = True
+            characters_db[character_name].updated_at = datetime.now()
+            self._save_character_config(character_name, characters_db[character_name])
+            
             logger.info(f"✅ 模型路径已更新为角色目录: {character_name}")
             logger.info(f"   GPT模型: {gpt_dst}")
             logger.info(f"   SoVITS模型: {sovits_dst}")
@@ -1877,11 +1988,28 @@ async def check_training_status_from_files(character_name: str):
 async def clean_training_models(character_name: str):
     """清理角色的训练模型和checkpoint文件"""
     try:
+        # 检查角色是否存在
+        training_service.get_character(character_name)
+        
         # 清理所有训练产物（包括SoVITS和GPT）
         success = training_service._clean_training_artifacts(character_name, TrainingStep.TRAIN_SOVITS, "v2ProPlus")
         if success:
             # 也清理GPT相关
             training_service._clean_training_artifacts(character_name, TrainingStep.TRAIN_GPT, "v2ProPlus")
+            
+            # 清理完成后，重置相关状态
+            if character_name in training_db:
+                training_db[character_name].status = ProcessingStatus.PENDING
+                training_db[character_name].gpt_model_path = None
+                training_db[character_name].sovits_model_path = None
+            
+            # 同步更新CharacterInfo中的状态
+            if character_name in characters_db:
+                characters_db[character_name].training_status = ProcessingStatus.PENDING
+                characters_db[character_name].model_exists = False
+                characters_db[character_name].updated_at = datetime.now()
+                training_service._save_character_config(character_name, characters_db[character_name])
+            
             return {"message": "训练产物清理成功", "success": True}
         else:
             raise HTTPException(status_code=500, detail="训练产物清理失败")
