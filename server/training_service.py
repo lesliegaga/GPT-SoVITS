@@ -1808,6 +1808,35 @@ async def get_audio_files_list(character_name: str):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+@app.get("/api/v1/characters/{character_name}/audio/files/{filename}")
+async def get_audio_file(character_name: str, filename: str):
+    """获取单个音频文件内容（用于在线播放/下载）"""
+    try:
+        # 校验角色是否存在
+        training_service.get_character(character_name)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="角色不存在")
+
+    # 对文件名进行解码与规范化，防止路径穿越
+    from urllib.parse import unquote
+    import unicodedata
+    from pathlib import Path as _Path
+    import mimetypes
+
+    decoded_name = unquote(filename or "")
+    decoded_name = unicodedata.normalize("NFC", decoded_name)
+    safe_name = _Path(decoded_name).name
+
+    file_path = training_service.get_character_raw_audio_dir(character_name) / safe_name
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="音频文件不存在")
+
+    media_type, _ = mimetypes.guess_type(str(file_path))
+    media_type = media_type or "application/octet-stream"
+
+    # 直接返回文件内容；FileResponse 会设置合适的响应头
+    return FileResponse(file_path, media_type=media_type, filename=safe_name)
+
 @app.delete("/api/v1/characters/{character_name}/audio/files/{filename}")
 async def delete_audio_file(character_name: str, filename: str):
     """删除指定的音频文件"""
