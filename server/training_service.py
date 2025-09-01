@@ -1337,9 +1337,12 @@ class CharacterBasedTrainingService:
                     character_name = f.read().strip()
                 
                 if character_name in characters_db:
-                    default_character = character_name
-                    characters_db[character_name].is_default = True
-                    logger.info(f"加载默认角色: {character_name}")
+                    for cur_name in characters_db.keys():
+                        if cur_name == character_name:
+                            characters_db[cur_name].is_default = True
+                        else:
+                            characters_db[cur_name].is_default = False
+                        logger.info(f"加载默认角色: {character_name}")
                 else:
                     logger.warning(f"默认角色不存在: {character_name}")
                     
