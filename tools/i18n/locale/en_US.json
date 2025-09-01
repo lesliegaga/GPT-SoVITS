@@ -86,7 +86,7 @@
     "前置数据集获取工具": "Fetch Datasets",
     "占用中": " Occupying",
     "去混响/去延迟，附：": "Dereverberation/Delay Removal, including:",
-    "参考音频在3~10秒范围外，请更换！": "Reference audio is outside the 3-10 second range, please choose another one!",
+    "参考音频在3~30秒范围外，请更换！": "Reference audio is outside the 3-30 second range, please choose another one!",
     "参考音频的文本": "Text for reference audio",
     "参考音频的语种": "Language for reference audio",
     "句间停顿秒数": "Pause Duration between Sentences (Seconds)",

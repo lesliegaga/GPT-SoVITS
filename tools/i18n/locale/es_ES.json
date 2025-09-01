@@ -86,7 +86,7 @@
     "前置数据集获取工具": "Herramienta de adquisición de conjunto de datos previo",
     "占用中": " En uso",
     "去混响/去延迟，附：": "Eliminación de reverberación/retardo, incluye:",
-    "参考音频在3~10秒范围外，请更换！": "El audio de referencia está fuera del rango de 3 a 10 segundos, ¡por favor cámbielo!",
+    "参考音频在3~30秒范围外，请更换！": "El audio de referencia está fuera del rango de 3 a 30 segundos, ¡por favor cámbielo!",
     "参考音频的文本": "Texto de referencia del audio",
     "参考音频的语种": "Idioma del audio de referencia",
     "句间停顿秒数": "Segundos de pausa entre frases",
