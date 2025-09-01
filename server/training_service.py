@@ -1732,30 +1732,47 @@ async def get_default_character():
     return {"default_character": default_char}
 
 # 音频上传API
+from urllib.parse import unquote
+from pathlib import Path
+import unicodedata
+
 @app.post("/api/v1/characters/{character_name}/audio/upload")
 async def upload_audio(character_name: str, file: UploadFile = File(...)):
-    """上传音频文件"""
     try:
         character_info = training_service.get_character(character_name)
     except ValueError:
         raise HTTPException(status_code=404, detail="角色不存在")
-    
-    # 获取角色音频目录
+
     audio_dir = training_service.get_character_raw_audio_dir(character_name)
-    file_path = audio_dir / file.filename
-    
-    # 保存文件
+
+    # 1) 取原始名（兜底）
+    raw_name = file.filename or "upload.wav"
+
+    # 2) 解码百分号编码（若原本未编码，不会改变）
+    decoded_name = unquote(raw_name)
+
+    # 3) 规范化并去除目录成分，避免路径穿越
+    decoded_name = unicodedata.normalize("NFC", decoded_name)
+    safe_name = Path(decoded_name).name
+
+    # 4) 可选：如果重名，追加序号
+    file_path = audio_dir / safe_name
+    if file_path.exists():
+        stem, suffix = file_path.stem, file_path.suffix
+        idx = 1
+        while file_path.exists():
+            file_path = audio_dir / f"{stem}({idx}){suffix}"
+            idx += 1
+
+    # 5) 保存
+    content = await file.read()
     with open(file_path, "wb") as f:
-        content = await file.read()
         f.write(content)
-    
-    # 更新音频数量
+
     training_service.update_character_audio_count(character_name)
-    
-    # 标记处理状态为过期
     training_service.invalidate_processing_status(character_name, "add_audio")
-    
-    return {"message": "音频上传成功", "filename": file.filename, "path": str(file_path)}
+
+    return {"message": "音频上传成功", "filename": file_path.name, "path": str(file_path)}
 
 # 音频处理API
 @app.post("/api/v1/characters/{character_name}/audio/process", response_model=AudioProcessingInfo)
